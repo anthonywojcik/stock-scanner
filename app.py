@@ -135,46 +135,84 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] { font-size:1.
 
 /* ── Mobile responsive ────────────────────────────────────────────────────── */
 @media screen and (max-width: 768px) {
+    /* Container */
     .block-container {
-        padding-left: 0.6rem !important;
-        padding-right: 0.6rem !important;
-        padding-top: 0.4rem !important;
+        padding-left: 0.55rem !important;
+        padding-right: 0.55rem !important;
+        padding-top: 0.35rem !important;
         max-width: 100% !important;
     }
-    /* Touch-friendly buttons */
+
+    /* Touch-friendly buttons — Apple HIG minimum 44px */
     .stButton > button {
         min-height: 48px !important;
-        font-size: 0.93em !important;
+        font-size: 0.95em !important;
+        font-weight: 600 !important;
         border-radius: 10px !important;
+        letter-spacing: 0.2px !important;
     }
-    /* Compact cards */
-    .rs-card-1 { padding: 15px 13px !important; }
-    .rs-card-2 { padding: 13px 13px !important; }
-    .rs-card-3 { padding: 11px 11px !important; }
-    /* Compact metric tiles */
+
+    /* Cards — tighter side padding */
+    .rs-card-1 { padding: 14px 12px !important; margin-bottom: 14px !important; }
+    .rs-card-2 { padding: 13px 12px !important; margin-bottom: 11px !important; }
+    .rs-card-3 { padding: 10px 10px !important; margin-bottom:  8px !important; }
+
+    /* Metric tiles — more breathable on 2-col vs 3-col desktop */
     div[data-testid="metric-container"] {
-        padding: 8px 10px !important;
+        padding: 9px 11px !important;
+        border-radius: 8px !important;
     }
     div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1.05em !important;
+        font-size: 1.15em !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
     }
     div[data-testid="metric-container"] label {
-        font-size: 0.72em !important;
+        font-size: 0.69em !important;
+        letter-spacing: 0.3px !important;
     }
-    /* Compact signal rows */
-    .sig-track { width: 46px !important; }
-    .sig-text  { font-size: 0.76em !important; }
-    /* Trade plan: single-column grid on mobile */
+    div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
+        font-size: 0.73em !important;
+    }
+
+    /* Signal rows — readable body text */
+    .sig-track { width: 44px !important; }
+    .sig-text  { font-size: 0.82em !important; line-height: 1.4 !important; }
+    .sig-pct   { font-size: 0.72em !important; }
+
+    /* Trade plan — single column + larger type */
     .box-trade > div[style*="grid"] {
         grid-template-columns: 1fr !important;
+        gap: 12px !important;
     }
-    /* Action boxes — tighter padding */
-    .box-action, .box-trade { padding: 11px 13px !important; }
-    .box-bull,  .box-bear   { padding: 11px 13px !important; }
-    /* Pills — slightly smaller */
-    .pill { font-size: 0.62em !important; }
-    /* Category panels */
-    .cat-panel { padding: 11px 12px !important; }
+
+    /* Box padding — tighter but not cramped */
+    .box-action { padding: 12px 13px !important; }
+    .box-trade  { padding: 13px 13px !important; }
+    .box-bull,
+    .box-bear   { padding: 12px 13px !important; }
+    .box-risk   { padding: 9px 12px !important;  }
+
+    /* Larger trade-plan label and value text */
+    .box-trade [style*="0.69em"] { font-size: 0.73em !important; }
+    .box-trade [style*="0.82em"] { font-size: 0.87em !important; }
+
+    /* Conviction card "WHY" body text */
+    .box-action [style*="0.81em"] { font-size: 0.87em !important; }
+
+    /* Category pills — compact */
+    .pill     { font-size: 0.63em !important; padding: 2px 7px !important; }
+    .pill-cat { font-size: 0.68em !important; padding: 2px 6px !important; }
+
+    /* Category signal panels */
+    .cat-panel  { padding: 10px 11px !important; margin-bottom: 10px !important; }
+    .cat-header { margin-bottom: 8px !important; padding-bottom: 6px !important; }
+
+    /* Env banner — slightly tighter */
+    .env-banner { padding: 14px 15px !important; margin-bottom: 14px !important; }
+
+    /* Footer — hide on mobile (not useful) */
+    .rs-footer { display: none !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -830,20 +868,34 @@ with tab_scout:
 
         if is_mobile:
             c1, c2 = st.columns(2)
-            c3, c4, c5 = st.columns(3)
+            c3, c4 = st.columns(2)
+            c1.metric("Analyzed", len(results))
+            c2.metric("Buy Signals", len(buys))
+            c3.metric("Top Score",
+                      f"{results[0]['composite']:.0f}" if results else "—",
+                      results[0]["ticker"] if results else "")
+            if buys:
+                c4.metric("Avg Score", f"{np.mean([r['composite'] for r in buys]):.1f}")
+            if sector_counts:
+                hot = max(sector_counts, key=sector_counts.get)
+                st.markdown(
+                    f"<div style='font-size:0.78em;color:#7092b0;margin-top:2px;padding:6px 2px'>"
+                    f"🔥 Hot sector: <b style='color:#e2e8f0'>{hot}</b>"
+                    f" <span style='color:#607d96'>· {sector_counts[hot]} signals</span></div>",
+                    unsafe_allow_html=True,
+                )
         else:
             c1, c2, c3, c4, c5 = st.columns(5)
-
-        c1.metric("Stocks Analyzed", len(results))
-        c2.metric("Buy Signals", len(buys))
-        c3.metric("Top Score",
-                  f"{results[0]['composite']:.0f}" if results else "—",
-                  results[0]["ticker"] if results else "")
-        if buys:
-            c4.metric("Avg Buy Score", f"{np.mean([r['composite'] for r in buys]):.1f}")
-        if sector_counts:
-            hot = max(sector_counts, key=sector_counts.get)
-            c5.metric("Hot Sector", hot[:16], f"{sector_counts[hot]} signals")
+            c1.metric("Stocks Analyzed", len(results))
+            c2.metric("Buy Signals", len(buys))
+            c3.metric("Top Score",
+                      f"{results[0]['composite']:.0f}" if results else "—",
+                      results[0]["ticker"] if results else "")
+            if buys:
+                c4.metric("Avg Buy Score", f"{np.mean([r['composite'] for r in buys]):.1f}")
+            if sector_counts:
+                hot = max(sector_counts, key=sector_counts.get)
+                c5.metric("Hot Sector", hot[:16], f"{sector_counts[hot]} signals")
 
         st.divider()
 
@@ -907,7 +959,7 @@ with tab_scout:
   </div>
   <div style='color:#607d96;font-size:0.73em;margin-top:5px'>Emerging: {top2_text}</div>
 </div>""", unsafe_allow_html=True)
-                    if st.button("Analyze →", key=f"t3_{r['ticker']}", use_container_width=False):
+                    if st.button("Analyze →", key=f"t3_{r['ticker']}", use_container_width=is_mobile):
                         st.session_state.selected_result      = r
                         st.session_state.navigate_to_analysis = True
 
@@ -990,46 +1042,74 @@ with tab_analysis:
         plan  = trade_plan(result)
 
         # ── Header ──
-        st.markdown(
-            f"<div style='display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:4px'>"
-            f"<span style='font-size:2em;font-weight:800;color:#f1f5f9;letter-spacing:-0.5px'>{ticker}</span>"
-            f"<span style='color:#64748b;font-size:1em'>{result.get('name','')}</span>"
-            f"{badge_html}"
-            f"</div>"
-            f"<div style='color:#7092b0;font-size:0.83em;margin-bottom:18px'>"
-            f"{result.get('sector','Unknown')} · {result.get('industry','Unknown')}"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        # ── KPI strip ──
         if is_mobile:
-            h1, h2 = st.columns(2)
-            h3, h4, h5 = st.columns(3)
-        else:
-            h1, h2, h3, h4, h5 = st.columns([1.4,1,1,1,1])
-        with h1:
             st.markdown(
-                f"<div style='background:#0e1520;border:1px solid {color}40;border-radius:10px;"
-                f"padding:14px 18px;text-align:center'>"
-                f"<div style='font-size:3em;font-weight:800;color:{color};line-height:1'>{score:.0f}</div>"
-                f"<div style='color:#607d96;font-size:0.72em;letter-spacing:0.5px;margin-top:2px'>RALLY SCORE / 100</div>"
+                f"<div style='margin-bottom:2px'>"
+                f"<span style='font-size:1.65em;font-weight:800;color:#f1f5f9;letter-spacing:-0.4px'>{ticker}</span>"
+                f"&nbsp;&nbsp;{badge_html}"
+                f"</div>"
+                f"<div style='color:#7e9ab8;font-size:0.79em;margin-bottom:4px'>{result.get('name','')}</div>"
+                f"<div style='color:#607d96;font-size:0.75em;margin-bottom:14px'>"
+                f"{result.get('sector','Unknown')} · {result.get('industry','Unknown')}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
+        else:
+            st.markdown(
+                f"<div style='display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:4px'>"
+                f"<span style='font-size:2em;font-weight:800;color:#f1f5f9;letter-spacing:-0.5px'>{ticker}</span>"
+                f"<span style='color:#64748b;font-size:1em'>{result.get('name','')}</span>"
+                f"{badge_html}"
+                f"</div>"
+                f"<div style='color:#7092b0;font-size:0.83em;margin-bottom:18px'>"
+                f"{result.get('sector','Unknown')} · {result.get('industry','Unknown')}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── KPI strip ──
         price  = result.get("price")
         chg1d  = result.get("change_1d")
         chg1m  = result.get("change_1m")
-        h2.metric("Price", f"${price:,.2f}" if price else "N/A",
-                  delta=f"{chg1d:+.1f}% today" if chg1d is not None else None)
-        h3.metric("1-Month Return", f"{chg1m:+.1f}%" if chg1m is not None else "N/A")
-        h4.metric("Market Cap", fmt_cap(result.get("market_cap")))
-        h5.metric(
-            "Analyst Target",
-            f"${meta['analyst_target']:.2f}" if meta.get("analyst_target") else "N/A",
-            delta=(f"{(meta['analyst_target']/price-1)*100:+.1f}% upside"
-                   if meta.get("analyst_target") and price else None),
+        _score_tile = (
+            f"<div style='background:#0e1520;border:1px solid {color}40;border-radius:10px;"
+            f"padding:14px 18px;text-align:center'>"
+            f"<div style='font-size:3em;font-weight:800;color:{color};line-height:1'>{score:.0f}</div>"
+            f"<div style='color:#607d96;font-size:0.72em;letter-spacing:0.5px;margin-top:2px'>RALLY SCORE / 100</div>"
+            f"</div>"
         )
+        if is_mobile:
+            # Score: full-width prominent block
+            st.markdown(_score_tile, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            # Price + 1-Month side by side
+            mA, mB = st.columns(2)
+            mA.metric("Price", f"${price:,.2f}" if price else "N/A",
+                      delta=f"{chg1d:+.1f}% today" if chg1d is not None else None)
+            mB.metric("1-Month", f"{chg1m:+.1f}%" if chg1m is not None else "N/A")
+            # Market Cap + Analyst Target side by side
+            mC, mD = st.columns(2)
+            mC.metric("Market Cap", fmt_cap(result.get("market_cap")))
+            mD.metric(
+                "Target",
+                f"${meta['analyst_target']:.2f}" if meta.get("analyst_target") else "N/A",
+                delta=(f"{(meta['analyst_target']/price-1)*100:+.1f}% upside"
+                       if meta.get("analyst_target") and price else None),
+            )
+        else:
+            h1, h2, h3, h4, h5 = st.columns([1.4,1,1,1,1])
+            with h1:
+                st.markdown(_score_tile, unsafe_allow_html=True)
+            h2.metric("Price", f"${price:,.2f}" if price else "N/A",
+                      delta=f"{chg1d:+.1f}% today" if chg1d is not None else None)
+            h3.metric("1-Month Return", f"{chg1m:+.1f}%" if chg1m is not None else "N/A")
+            h4.metric("Market Cap", fmt_cap(result.get("market_cap")))
+            h5.metric(
+                "Analyst Target",
+                f"${meta['analyst_target']:.2f}" if meta.get("analyst_target") else "N/A",
+                delta=(f"{(meta['analyst_target']/price-1)*100:+.1f}% upside"
+                       if meta.get("analyst_target") and price else None),
+            )
 
         st.divider()
 
@@ -1120,15 +1200,33 @@ with tab_analysis:
                 st.plotly_chart(fig_p, use_container_width=True)
         with ra_col:
             st.markdown("**Category Scores**")
-            st.plotly_chart(build_radar(result["categories"]), use_container_width=True)
-            for cat, val in result["categories"].items():
-                c = score_color(val)
-                st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;font-size:0.80em;margin-bottom:4px'>"
-                    f"<span style='color:#7e9ab8'>{CAT_ICONS.get(cat,'')} {cat}</span>"
-                    f"<span style='color:{c};font-weight:700'>{val:.0f}/100</span></div>",
-                    unsafe_allow_html=True,
-                )
+            if is_mobile:
+                # 2-column grid of score tiles — radar is unreadable at mobile width
+                cats = list(result["categories"].items())
+                for row_start in range(0, len(cats), 2):
+                    pair = cats[row_start:row_start + 2]
+                    cols_c = st.columns(len(pair))
+                    for ci, (cat, val) in enumerate(pair):
+                        c = score_color(val)
+                        cols_c[ci].markdown(
+                            f"<div style='background:#0e1520;border:1px solid #1a2840;"
+                            f"border-radius:8px;padding:9px 10px;text-align:center;margin-bottom:8px'>"
+                            f"<div style='font-size:1.3em;font-weight:800;color:{c};line-height:1.1'>{val:.0f}</div>"
+                            f"<div style='font-size:0.62em;color:#7e9ab8;margin-top:3px;letter-spacing:0.3px'>"
+                            f"{CAT_ICONS.get(cat,'')} {cat.upper()}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+            else:
+                st.plotly_chart(build_radar(result["categories"]), use_container_width=True)
+                for cat, val in result["categories"].items():
+                    c = score_color(val)
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;font-size:0.80em;margin-bottom:4px'>"
+                        f"<span style='color:#7e9ab8'>{CAT_ICONS.get(cat,'')} {cat}</span>"
+                        f"<span style='color:{c};font-weight:700'>{val:.0f}/100</span></div>",
+                        unsafe_allow_html=True,
+                    )
 
         st.divider()
 
@@ -1171,8 +1269,9 @@ with tab_analysis:
         # ── Key numbers ──
         st.markdown("### Key Numbers")
         if is_mobile:
-            km1, km2, km3 = st.columns(3)
-            km4, km5, km6 = st.columns(3)
+            km1, km2 = st.columns(2)
+            km3, km4 = st.columns(2)
+            km5, km6 = st.columns(2)
         else:
             km1, km2, km3, km4, km5, km6 = st.columns(6)
         km1.metric("P/E (TTM)",   f"{meta['pe_ratio']:.1f}x"   if meta.get("pe_ratio")   else "N/A")
