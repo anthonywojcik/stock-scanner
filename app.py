@@ -132,6 +132,50 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] { font-size:1.
 .scan-pill { background:#0a1a0f; border:1px solid #1a3a22; border-radius:8px; padding:10px 14px; margin-bottom:12px; }
 .scan-pill-label { font-size:0.69em; color:#4ade80; font-weight:700; letter-spacing:0.6px; }
 .scan-pill-sub { font-size:0.78em; color:#8aabca; margin-top:2px; }
+
+/* ── Mobile responsive ────────────────────────────────────────────────────── */
+@media screen and (max-width: 768px) {
+    .block-container {
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
+        padding-top: 0.4rem !important;
+        max-width: 100% !important;
+    }
+    /* Touch-friendly buttons */
+    .stButton > button {
+        min-height: 48px !important;
+        font-size: 0.93em !important;
+        border-radius: 10px !important;
+    }
+    /* Compact cards */
+    .rs-card-1 { padding: 15px 13px !important; }
+    .rs-card-2 { padding: 13px 13px !important; }
+    .rs-card-3 { padding: 11px 11px !important; }
+    /* Compact metric tiles */
+    div[data-testid="metric-container"] {
+        padding: 8px 10px !important;
+    }
+    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
+        font-size: 1.05em !important;
+    }
+    div[data-testid="metric-container"] label {
+        font-size: 0.72em !important;
+    }
+    /* Compact signal rows */
+    .sig-track { width: 46px !important; }
+    .sig-text  { font-size: 0.76em !important; }
+    /* Trade plan: single-column grid on mobile */
+    .box-trade > div[style*="grid"] {
+        grid-template-columns: 1fr !important;
+    }
+    /* Action boxes — tighter padding */
+    .box-action, .box-trade { padding: 11px 13px !important; }
+    .box-bull,  .box-bear   { padding: 11px 13px !important; }
+    /* Pills — slightly smaller */
+    .pill { font-size: 0.62em !important; }
+    /* Category panels */
+    .cat-panel { padding: 11px 12px !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -703,15 +747,33 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
-st.markdown(
-    "<h1 style='font-size:1.8em;font-weight:800;letter-spacing:-0.5px;margin-bottom:2px'>📈 Rally Scout</h1>"
-    "<p style='color:#7092b0;font-size:0.88em;margin-bottom:0'>Dynamic universe · 41 signals · Tells you exactly what to buy and why.</p>",
-    unsafe_allow_html=True,
-)
 
-tab_scout, tab_analysis, tab_market, tab_custom = st.tabs([
-    "🏆 Top Picks", "📊 Deep Dive", "🌊 Market", "🔍 Custom Scan"
-])
+# Mobile detection — no extra packages; User-Agent from request headers
+try:
+    _ua = st.context.headers.get("User-Agent", "")
+except Exception:
+    _ua = ""
+is_mobile = any(k in _ua for k in ("iPhone", "Android", "Mobile", "iPad"))
+
+if is_mobile:
+    st.markdown(
+        "<h1 style='font-size:1.35em;font-weight:800;letter-spacing:-0.3px;margin-bottom:1px'>📈 Rally Scout</h1>"
+        "<p style='color:#7092b0;font-size:0.80em;margin-bottom:0'>41 signals · Know exactly what to buy.</p>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        "<h1 style='font-size:1.8em;font-weight:800;letter-spacing:-0.5px;margin-bottom:2px'>📈 Rally Scout</h1>"
+        "<p style='color:#7092b0;font-size:0.88em;margin-bottom:0'>Dynamic universe · 41 signals · Tells you exactly what to buy and why.</p>",
+        unsafe_allow_html=True,
+    )
+
+_tab_labels = (
+    ["🏆 Picks", "📊 Analysis", "🌊 Market", "🔍 Scan"]
+    if is_mobile else
+    ["🏆 Top Picks", "📊 Deep Dive", "🌊 Market", "🔍 Custom Scan"]
+)
+tab_scout, tab_analysis, tab_market, tab_custom = st.tabs(_tab_labels)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -762,7 +824,16 @@ with tab_scout:
         tier3 = [r for r in results if 50 <= r["composite"] < 65]
 
         # Summary metrics
-        c1, c2, c3, c4, c5 = st.columns(5)
+        sector_counts: dict = {}
+        for r in buys:
+            sector_counts[r["sector"]] = sector_counts.get(r["sector"], 0) + 1
+
+        if is_mobile:
+            c1, c2 = st.columns(2)
+            c3, c4, c5 = st.columns(3)
+        else:
+            c1, c2, c3, c4, c5 = st.columns(5)
+
         c1.metric("Stocks Analyzed", len(results))
         c2.metric("Buy Signals", len(buys))
         c3.metric("Top Score",
@@ -770,9 +841,6 @@ with tab_scout:
                   results[0]["ticker"] if results else "")
         if buys:
             c4.metric("Avg Buy Score", f"{np.mean([r['composite'] for r in buys]):.1f}")
-        sector_counts: dict = {}
-        for r in buys:
-            sector_counts[r["sector"]] = sector_counts.get(r["sector"], 0) + 1
         if sector_counts:
             hot = max(sector_counts, key=sector_counts.get)
             c5.metric("Hot Sector", hot[:16], f"{sector_counts[hot]} signals")
@@ -783,10 +851,14 @@ with tab_scout:
         if tier1:
             st.markdown("## 🏆 Highest Conviction — Score 80+")
             st.caption("All major signal categories firing simultaneously. The strongest setups currently in the market.")
-            cols1 = st.columns(2)
-            for i, r in enumerate(tier1):
-                with cols1[i % 2]:
+            if is_mobile:
+                for r in tier1:
                     render_conviction_card(r, tier=1)
+            else:
+                cols1 = st.columns(2)
+                for i, r in enumerate(tier1):
+                    with cols1[i % 2]:
+                        render_conviction_card(r, tier=1)
         else:
             st.markdown("## 🏆 Highest Conviction — Score 80+")
             st.info("No stocks currently score 80+. The setups below are the strongest available today.")
@@ -795,10 +867,14 @@ with tab_scout:
         if tier2:
             st.markdown("## ⚡ Strong Buy — Score 65–79")
             st.caption("Clear buy signal with most categories confirming. Scale into these over 2-3 entries.")
-            cols2 = st.columns(2)
-            for i, r in enumerate(tier2):
-                with cols2[i % 2]:
+            if is_mobile:
+                for r in tier2:
                     render_conviction_card(r, tier=2)
+            else:
+                cols2 = st.columns(2)
+                for i, r in enumerate(tier2):
+                    with cols2[i % 2]:
+                        render_conviction_card(r, tier=2)
 
         # Tier 3
         if tier3:
@@ -838,30 +914,31 @@ with tab_scout:
         if not tier1 and not tier2 and not tier3:
             st.warning("No setups above 50. Market may be in a risk-off environment. Check the Market tab.")
 
-        # Score distribution
-        st.divider()
-        st.markdown("#### Score Distribution — All Analyzed Stocks")
-        scores_list  = [r["composite"] for r in results]
-        tickers_list = [r["ticker"]    for r in results]
-        fig_dist = go.Figure(go.Bar(
-            x=tickers_list, y=scores_list,
-            marker_color=[score_color(s) for s in scores_list],
-            text=[f"{s:.0f}" for s in scores_list],
-            textposition="outside",
-            hovertemplate="<b>%{x}</b><br>Score: %{y:.1f}<extra></extra>",
-        ))
-        fig_dist.add_hline(y=BUY_SIGNAL_THRESHOLD, line_dash="dash",
-                           line_color="#f59e0b", annotation_text=f"Buy threshold ({BUY_SIGNAL_THRESHOLD})")
-        fig_dist.add_hline(y=80, line_dash="dash",
-                           line_color="#00d084", annotation_text="Highest conviction (80)")
-        fig_dist.update_layout(
-            template="plotly_dark", paper_bgcolor="#0b1119", plot_bgcolor="#0b1119",
-            height=300, margin=dict(l=0,r=0,t=24,b=0),
-            yaxis=dict(range=[0,105], gridcolor="#1a2535"),
-            xaxis=dict(gridcolor="#1a2535"),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_dist, use_container_width=True)
+        # Score distribution — desktop only (too dense on small screens)
+        if not is_mobile:
+            st.divider()
+            st.markdown("#### Score Distribution — All Analyzed Stocks")
+            scores_list  = [r["composite"] for r in results]
+            tickers_list = [r["ticker"]    for r in results]
+            fig_dist = go.Figure(go.Bar(
+                x=tickers_list, y=scores_list,
+                marker_color=[score_color(s) for s in scores_list],
+                text=[f"{s:.0f}" for s in scores_list],
+                textposition="outside",
+                hovertemplate="<b>%{x}</b><br>Score: %{y:.1f}<extra></extra>",
+            ))
+            fig_dist.add_hline(y=BUY_SIGNAL_THRESHOLD, line_dash="dash",
+                               line_color="#f59e0b", annotation_text=f"Buy threshold ({BUY_SIGNAL_THRESHOLD})")
+            fig_dist.add_hline(y=80, line_dash="dash",
+                               line_color="#00d084", annotation_text="Highest conviction (80)")
+            fig_dist.update_layout(
+                template="plotly_dark", paper_bgcolor="#0b1119", plot_bgcolor="#0b1119",
+                height=300, margin=dict(l=0,r=0,t=24,b=0),
+                yaxis=dict(range=[0,105], gridcolor="#1a2535"),
+                xaxis=dict(gridcolor="#1a2535"),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -870,14 +947,20 @@ with tab_scout:
 with tab_analysis:
     result = st.session_state.get("selected_result")
 
-    col_in, col_btn = st.columns([4, 1])
-    with col_in:
+    if is_mobile:
         direct_ticker = st.text_input("Analyze any ticker",
                                        placeholder="e.g. NVDA, AAPL, CRWV",
                                        label_visibility="collapsed")
-    with col_btn:
-        st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
         analyze_btn = st.button("Analyze →", type="primary", use_container_width=True)
+    else:
+        col_in, col_btn = st.columns([4, 1])
+        with col_in:
+            direct_ticker = st.text_input("Analyze any ticker",
+                                           placeholder="e.g. NVDA, AAPL, CRWV",
+                                           label_visibility="collapsed")
+        with col_btn:
+            st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
+            analyze_btn = st.button("Analyze →", type="primary", use_container_width=True)
 
     if analyze_btn and direct_ticker.strip():
         ticker_upper = direct_ticker.strip().upper()
@@ -920,7 +1003,11 @@ with tab_analysis:
         )
 
         # ── KPI strip ──
-        h1, h2, h3, h4, h5 = st.columns([1.4,1,1,1,1])
+        if is_mobile:
+            h1, h2 = st.columns(2)
+            h3, h4, h5 = st.columns(3)
+        else:
+            h1, h2, h3, h4, h5 = st.columns([1.4,1,1,1,1])
         with h1:
             st.markdown(
                 f"<div style='background:#0e1520;border:1px solid {color}40;border-radius:10px;"
@@ -1000,7 +1087,11 @@ with tab_analysis:
         st.divider()
 
         # ── Bull thesis / risk factors ──
-        t_col, r_col = st.columns(2)
+        if is_mobile:
+            t_col = st.container()
+            r_col = st.container()
+        else:
+            t_col, r_col = st.columns(2)
         with t_col:
             st.markdown("#### 🟢 Why This Could Rally")
             html = "".join(f"<li style='margin-bottom:9px;color:#d1fae5;font-size:0.86em'>{r}</li>" for r in reasons)
@@ -1015,11 +1106,18 @@ with tab_analysis:
         st.divider()
 
         # ── Chart + radar ──
-        ch_col, ra_col = st.columns([3, 1])
+        if is_mobile:
+            ch_col = st.container()
+            ra_col = st.container()
+        else:
+            ch_col, ra_col = st.columns([3, 1])
         with ch_col:
             df_p = result.get("price_df")
             if df_p is not None and not df_p.empty:
-                st.plotly_chart(build_price_chart(df_p, ticker), use_container_width=True)
+                fig_p = build_price_chart(df_p, ticker)
+                if is_mobile:
+                    fig_p.update_layout(height=300)
+                st.plotly_chart(fig_p, use_container_width=True)
         with ra_col:
             st.markdown("**Category Scores**")
             st.plotly_chart(build_radar(result["categories"]), use_container_width=True)
@@ -1046,7 +1144,11 @@ with tab_analysis:
             ("sentiment",     "Sentiment",     "🧠 Sentiment — Positioning"),
             ("timing",        "Timing",        "⏰ Timing — Entry Quality"),
         ]
-        left_col, right_col = st.columns(2)
+        if is_mobile:
+            left_col = st.container()
+            right_col = left_col  # single stacked column on mobile
+        else:
+            left_col, right_col = st.columns(2)
         for idx, (key, cat_name, title) in enumerate(cat_order):
             col = left_col if idx % 2 == 0 else right_col
             with col:
@@ -1068,7 +1170,11 @@ with tab_analysis:
 
         # ── Key numbers ──
         st.markdown("### Key Numbers")
-        km1,km2,km3,km4,km5,km6 = st.columns(6)
+        if is_mobile:
+            km1, km2, km3 = st.columns(3)
+            km4, km5, km6 = st.columns(3)
+        else:
+            km1, km2, km3, km4, km5, km6 = st.columns(6)
         km1.metric("P/E (TTM)",   f"{meta['pe_ratio']:.1f}x"   if meta.get("pe_ratio")   else "N/A")
         km2.metric("Forward P/E", f"{meta['forward_pe']:.1f}x" if meta.get("forward_pe") else "N/A")
         km3.metric("Beta",        f"{meta['beta']:.2f}"         if meta.get("beta")        else "N/A",
@@ -1117,7 +1223,11 @@ with tab_market:
         unsafe_allow_html=True,
     )
 
-    mc1,mc2,mc3,mc4 = st.columns(4)
+    if is_mobile:
+        mc1, mc2 = st.columns(2)
+        mc3, mc4 = st.columns(2)
+    else:
+        mc1, mc2, mc3, mc4 = st.columns(4)
     mc1.metric("VIX Fear Index", f"{vix:.1f}" if vix else "N/A",
                delta=f"{vix_chg:+.1f} vs 5d ago" if vix_chg is not None else None,
                delta_color="inverse")
@@ -1133,7 +1243,11 @@ with tab_market:
 
     st.divider()
 
-    s_col, c_col = st.columns([1.2, 1])
+    if is_mobile:
+        s_col = st.container()
+        c_col = st.container()
+    else:
+        s_col, c_col = st.columns([1.2, 1])
     with s_col:
         st.markdown("#### Sector Rotation — Where Is the Money Going?")
         st.caption("Green bars = inflows. Bias your longs toward those sectors. Avoid longs in red sectors.")
@@ -1154,7 +1268,8 @@ with tab_market:
             fv.add_hline(y=30, line_dash="dash", line_color="#f43f5e",  annotation_text="Fear (30)")
             fv.update_layout(
                 template="plotly_dark", paper_bgcolor="#0e1520", plot_bgcolor="#0e1520",
-                height=200, margin=dict(l=0,r=0,t=5,b=0), showlegend=False,
+                height=160 if is_mobile else 200,
+                margin=dict(l=0,r=0,t=5,b=0), showlegend=False,
                 yaxis=dict(gridcolor="#1a2535"), xaxis=dict(gridcolor="#1a2535"),
             )
             st.plotly_chart(fv, use_container_width=True)
@@ -1170,7 +1285,8 @@ with tab_market:
                                      name="50d avg", line=dict(color="#38bdf8", width=1, dash="dash")))
             fs.update_layout(
                 template="plotly_dark", paper_bgcolor="#0e1520", plot_bgcolor="#0e1520",
-                height=190, margin=dict(l=0,r=0,t=5,b=0),
+                height=155 if is_mobile else 190,
+                margin=dict(l=0,r=0,t=5,b=0),
                 legend=dict(orientation="h", y=1.15, font=dict(size=9)),
                 yaxis=dict(gridcolor="#1a2535"), xaxis=dict(gridcolor="#1a2535"),
             )
@@ -1220,7 +1336,11 @@ with tab_custom:
         st.info("Configure your scan in the sidebar and click **Run Custom Scan →**.")
     else:
         buys_c = [r for r in custom_results if r["is_buy"]]
-        ca, cb, cc, cd = st.columns(4)
+        if is_mobile:
+            ca, cb = st.columns(2)
+            cc, cd = st.columns(2)
+        else:
+            ca, cb, cc, cd = st.columns(4)
         ca.metric("Scanned",     len(custom_results))
         cb.metric("Buy Signals", len(buys_c))
         cc.metric("Avg Score",   f"{np.mean([r['composite'] for r in custom_results]):.1f}")
@@ -1279,4 +1399,4 @@ and may be delayed by 15 minutes or more.
 # ── Tab navigation — fires after all tabs are rendered ────────────────────────
 if st.session_state.get("navigate_to_analysis"):
     st.session_state.navigate_to_analysis = False
-    navigate_to_tab("Deep Dive")
+    navigate_to_tab("Analysis" if is_mobile else "Deep Dive")
