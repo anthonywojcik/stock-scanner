@@ -3,6 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import hmac
+import json
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -250,6 +251,33 @@ if not _check_password():
     st.stop()
 
 
+# ── Browser localStorage — portfolio persistence ──────────────────────────────
+try:
+    from streamlit_local_storage import LocalStorage as _LS
+    _localS = _LS()
+
+    if not st.session_state.get("_pf_storage_done"):
+        _stored = _localS.getItem("rs_portfolio")
+        _ls_try = st.session_state.get("_ls_try", 0)
+        if _stored is not None:
+            # Component hydrated and returned a value
+            if "portfolio" not in st.session_state:
+                try:
+                    _loaded = json.loads(_stored) if isinstance(_stored, str) else _stored
+                    if isinstance(_loaded, list) and _loaded:
+                        st.session_state.portfolio = _loaded
+                except Exception:
+                    pass
+            st.session_state._pf_storage_done = True
+        elif _ls_try >= 1:
+            # Component had time to load; key simply doesn't exist
+            st.session_state._pf_storage_done = True
+        else:
+            st.session_state._ls_try = _ls_try + 1
+except Exception:
+    _localS = None  # package not installed yet — silently skip
+
+
 # ── Translation tables ────────────────────────────────────────────────────────
 SIGNAL_PLAIN = {
     "Golden Cross":           "50-day avg crossed ABOVE 200-day — textbook bull trend signal",
@@ -456,36 +484,75 @@ def fetch_live_prices(tickers: tuple) -> dict[str, float]:
 
 def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
-    Parse a Yahoo Finance portfolio export CSV into a list of holding dicts.
-    Returns None if the CSV doesn't contain holdings data (e.g. a watchlist export).
+    Parse a Yahoo Finance (or compatible brokerage) portfolio export CSV.
+    Handles multiple column-name variants Yahoo Finance has used over time.
     Multiple lots of the same ticker are aggregated with weighted-average cost basis.
     """
     df.columns = [str(c).strip() for c in df.columns]
-    if "Symbol" not in df.columns or "Quantity" not in df.columns:
+
+    def _col(*candidates: str) -> str | None:
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    sym_col   = _col("Symbol", "Ticker", "Tick")
+    qty_col   = _col("Quantity", "Shares", "Qty", "Units", "# Shares", "Num Shares")
+    cost_col  = _col(
+        "Purchase Price", "Avg Cost/Share", "Avg Cost / Share",
+        "Average Cost", "Cost/Share", "Cost Basis/Share",
+        "Book Cost/Share", "Adjusted Cost Basis", "Avg Price",
+    )
+    price_col = _col(
+        "Current Price", "Last Price", "Price", "Market Price",
+        "Last", "Close", "Mark",
+    )
+    mval_col  = _col(
+        "Market Value", "Total Value", "Current Value",
+        "Mkt Value", "Market Val", "Value",
+    )
+    book_col  = _col(
+        "Book Cost", "Book Value", "Total Cost", "Cost Basis",
+        "Total Book Cost", "Book Value Total",
+    )
+
+    if sym_col is None or qty_col is None:
         return None
 
     def _f(val) -> float:
-        """Parse a numeric cell; returns 0.0 for blanks, non-numeric, or NaN."""
         try:
-            f = float(str(val).replace(",", "").replace("$", "").strip())
-            return 0.0 if f != f else f  # f != f is True only for NaN
+            f = float(str(val).replace(",", "").replace("$", "").replace("%", "").strip())
+            return 0.0 if f != f else f  # NaN guard
         except (ValueError, TypeError):
             return 0.0
 
     lots: list[dict] = []
     for _, row in df.iterrows():
-        ticker = str(row.get("Symbol", "")).strip().upper()
-        # Skip cash rows ($$CASH_TX etc.), header echoes, and non-ticker symbols
+        ticker = str(row.get(sym_col, "")).strip().upper()
         if not ticker or not _TICKER_VALID.match(ticker):
             continue
-        qty = _f(row.get("Quantity", 0))
+        qty = _f(row.get(qty_col, 0))
         if qty <= 0:
             continue
+
+        cost  = _f(row.get(cost_col,  0)) if cost_col  else 0.0
+        price = _f(row.get(price_col, 0)) if price_col else 0.0
+        mval  = _f(row.get(mval_col,  0)) if mval_col  else 0.0
+        book  = _f(row.get(book_col,  0)) if book_col  else 0.0
+
+        # Derive cost/share from total book cost when per-share column missing
+        if cost == 0.0 and book > 0 and qty > 0:
+            cost = book / qty
+        # Derive price from market value when per-share column missing
+        if price == 0.0 and mval > 0 and qty > 0:
+            price = mval / qty
+
         lots.append({
-            "ticker":            ticker,
-            "shares":            qty,
-            "cost_basis":        _f(row.get("Purchase Price", 0)),
-            "current_price_csv": _f(row.get("Current Price", row.get("Last Price", 0))),
+            "ticker":           ticker,
+            "shares":           qty,
+            "cost_basis":       cost,
+            "current_price_csv": price,
+            "market_value_csv": mval if mval > 0 else (price * qty),
         })
 
     if not lots:
@@ -496,18 +563,23 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     for h in lots:
         t = h["ticker"]
         if t not in agg:
-            agg[t] = {"shares": 0.0, "cost_total": 0.0, "current_price_csv": 0.0}
-        agg[t]["shares"]        += h["shares"]
-        agg[t]["cost_total"]    += h["shares"] * h["cost_basis"]
-        agg[t]["current_price_csv"] = h["current_price_csv"]
+            agg[t] = {"shares": 0.0, "cost_total": 0.0, "mval_total": 0.0, "price_last": 0.0}
+        agg[t]["shares"]     += h["shares"]
+        agg[t]["cost_total"] += h["shares"] * h["cost_basis"]
+        agg[t]["mval_total"] += h["market_value_csv"]
+        agg[t]["price_last"]  = h["current_price_csv"]
 
     return sorted(
         [
             {
-                "ticker":            t,
-                "shares":            d["shares"],
-                "cost_basis":        d["cost_total"] / d["shares"] if d["shares"] else 0.0,
-                "current_price_csv": d["current_price_csv"],
+                "ticker":           t,
+                "shares":           d["shares"],
+                "cost_basis":       d["cost_total"] / d["shares"] if d["shares"] else 0.0,
+                # Best CSV price: explicit per-share price, else derive from market value
+                "current_price_csv": d["price_last"] or (
+                    d["mval_total"] / d["shares"] if d["shares"] and d["mval_total"] > 0 else 0.0
+                ),
+                "market_value_csv": d["mval_total"],
             }
             for t, d in agg.items()
         ],
@@ -848,6 +920,11 @@ with st.sidebar:
                     st.session_state._portfolio_file_id = pf_file_id
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
+                    if _localS is not None:
+                        try:
+                            _localS.setItem("rs_portfolio", json.dumps(holdings))
+                        except Exception:
+                            pass
                     st.success(f"Loaded {len(holdings)} positions from {uploaded_pf.name}")
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
@@ -861,6 +938,11 @@ with st.sidebar:
             st.session_state._portfolio_file_id = None
             st.session_state.auto_scan_complete = False
             st.session_state.auto_results       = []
+            if _localS is not None:
+                try:
+                    _localS.deleteItem("rs_portfolio")
+                except Exception:
+                    pass
             st.rerun()
 
     st.divider()
@@ -1179,15 +1261,19 @@ with tab_portfolio:
         batch_prices = fetch_live_prices(all_pf_tickers)
 
         def _live(h: dict, r: dict | None) -> float:
-            """Live price priority: batch yfinance → scan result → CSV snapshot."""
+            """Live price priority: batch yfinance → scan result → CSV price → CSV market value."""
+            mval = h.get("market_value_csv", 0) or 0.0
+            shares = h.get("shares", 0) or 0.0
+            mval_derived = (mval / shares) if (mval > 0 and shares > 0) else 0.0
             for candidate in (
                 batch_prices.get(h["ticker"]),
                 r["price"] if r and r.get("price") else None,
-                h["current_price_csv"],
+                h.get("current_price_csv"),
+                mval_derived,
             ):
                 try:
                     f = float(candidate or 0)
-                    if f > 0 and f == f:   # f != f catches NaN
+                    if f > 0 and f == f:
                         return f
                 except (TypeError, ValueError):
                     pass
