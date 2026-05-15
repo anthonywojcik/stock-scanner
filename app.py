@@ -1361,17 +1361,20 @@ with tab_portfolio:
         # ── Portfolio summary ──────────────────────────────────────────────────
         total_cost  = 0.0
         total_value = 0.0
+        n_buy       = 0
         for h in portfolio:
-            r = scored_map.get(h["ticker"])
+            r          = scored_map.get(h["ticker"])
             live_price = _live(h, r)
             total_cost  += h["shares"] * h["cost_basis"]
             total_value += h["shares"] * live_price
+            score   = r["composite"] if r else None
+            pnl_pct = (live_price / h["cost_basis"] - 1) * 100 if h.get("cost_basis", 0) > 0 and live_price > 0 else 0.0
+            if portfolio_action(score, pnl_pct)[0] in ("ADD", "BUY MORE"):
+                n_buy += 1
 
         total_pnl     = total_value - total_cost
         total_pnl_pct = (total_value / total_cost - 1) * 100 if total_cost > 0 else 0.0
         pnl_color     = "#00d084" if total_pnl >= 0 else "#f43f5e"
-        n_buy         = sum(1 for h in portfolio
-                            if scored_map.get(h["ticker"], {}).get("is_buy"))
 
         n_live = sum(1 for h in portfolio if h["ticker"] in batch_prices)
         hdr_col, btn_col = st.columns([5, 1])
