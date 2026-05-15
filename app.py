@@ -462,25 +462,46 @@ _TICKER_VALID = __import__("re").compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_live_prices(tickers: tuple) -> dict[str, float]:
-    """Batch-download current closing prices for a tuple of tickers. Cached 5 min."""
+    """
+    Batch-download current prices for all tickers, then retry any misses
+    individually via Ticker.history(). Cached 5 min.
+    """
     if not tickers:
         return {}
+
+    prices: dict[str, float] = {}
+
+    # ── Pass 1: batch download (fast) ──────────────────────────────────────────
     try:
-        raw = yf.download(list(tickers), period="2d", auto_adjust=True,
+        raw = yf.download(list(tickers), period="5d", auto_adjust=True,
                           progress=False, threads=True)
-        if raw.empty:
-            return {}
-        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
-        prices: dict[str, float] = {}
-        for t in tickers:
-            col = close[t].dropna() if t in close.columns else pd.Series(dtype=float)
-            if col.empty and len(tickers) == 1:
-                col = close.squeeze().dropna()
-            if not col.empty:
-                prices[t] = round(float(col.iloc[-1]), 4)
-        return prices
+        if not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                close_df = raw["Close"]  # DataFrame: date × ticker
+            else:
+                # Single-ticker batch returns flat OHLCV — extract Close column
+                close_df = raw[["Close"]].rename(columns={"Close": tickers[0]})
+
+            for t in tickers:
+                if t in close_df.columns:
+                    col = close_df[t].dropna()
+                    if not col.empty:
+                        prices[t] = round(float(col.iloc[-1]), 4)
     except Exception:
-        return {}
+        pass
+
+    # ── Pass 2: individual fallback for any ticker that didn't get a price ─────
+    for t in [t for t in tickers if t not in prices]:
+        try:
+            hist = yf.Ticker(t).history(period="5d", auto_adjust=True)
+            if not hist.empty and "Close" in hist.columns:
+                col = hist["Close"].dropna()
+                if not col.empty:
+                    prices[t] = round(float(col.iloc[-1]), 4)
+        except Exception:
+            pass
+
+    return prices
 
 def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
@@ -1294,7 +1315,18 @@ with tab_portfolio:
         n_buy         = sum(1 for h in portfolio
                             if scored_map.get(h["ticker"], {}).get("is_buy"))
 
-        st.markdown("### 💼 Portfolio Overview")
+        n_live = sum(1 for h in portfolio if h["ticker"] in batch_prices)
+        hdr_col, btn_col = st.columns([5, 1])
+        hdr_col.markdown(
+            f"### 💼 Portfolio Overview "
+            f"<span style='font-size:0.55em;color:#607d96;vertical-align:middle'>"
+            f"{n_live}/{len(portfolio)} prices live</span>",
+            unsafe_allow_html=True,
+        )
+        if btn_col.button("↻ Prices", help="Force-refresh live prices"):
+            fetch_live_prices.clear()
+            st.rerun()
+
         if is_mobile:
             sm1, sm2 = st.columns(2)
             sm3, sm4 = st.columns(2)
