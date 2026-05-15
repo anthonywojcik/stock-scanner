@@ -142,84 +142,51 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] { font-size:1.
 
 /* ── Mobile responsive ────────────────────────────────────────────────────── */
 @media screen and (max-width: 768px) {
-    /* Container */
     .block-container {
-        padding-left: 0.55rem !important;
-        padding-right: 0.55rem !important;
-        padding-top: 0.35rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        padding-top: 0.25rem !important;
         max-width: 100% !important;
     }
 
-    /* Touch-friendly buttons — Apple HIG minimum 44px */
+    /* Touch-friendly buttons */
     .stButton > button {
         min-height: 48px !important;
         font-size: 0.95em !important;
         font-weight: 600 !important;
         border-radius: 10px !important;
-        letter-spacing: 0.2px !important;
     }
 
-    /* Cards — tighter side padding */
-    .rs-card-1 { padding: 14px 12px !important; margin-bottom: 14px !important; }
-    .rs-card-2 { padding: 13px 12px !important; margin-bottom: 11px !important; }
-    .rs-card-3 { padding: 10px 10px !important; margin-bottom:  8px !important; }
+    /* Cards */
+    .rs-card-1 { padding: 16px 14px !important; margin-bottom: 16px !important; }
+    .rs-card-2 { padding: 15px 14px !important; margin-bottom: 13px !important; }
+    .rs-card-3 { padding: 13px 12px !important; margin-bottom: 10px !important; }
 
-    /* Metric tiles — more breathable on 2-col vs 3-col desktop */
-    div[data-testid="metric-container"] {
-        padding: 9px 11px !important;
-        border-radius: 8px !important;
-    }
-    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1.15em !important;
-        font-weight: 700 !important;
-        line-height: 1.2 !important;
-    }
-    div[data-testid="metric-container"] label {
-        font-size: 0.69em !important;
-        letter-spacing: 0.3px !important;
-    }
-    div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
-        font-size: 0.73em !important;
-    }
-
-    /* Signal rows — readable body text */
+    /* Signal rows */
     .sig-track { width: 44px !important; }
     .sig-text  { font-size: 0.82em !important; line-height: 1.4 !important; }
-    .sig-pct   { font-size: 0.72em !important; }
 
-    /* Trade plan — single column + larger type */
+    /* Deep Dive boxes */
+    .box-action { padding: 12px 13px !important; }
+    .box-trade  { padding: 13px 13px !important; }
+    .box-bull,
+    .box-bear   { padding: 12px 13px !important; }
+    .box-risk   { padding: 9px 12px !important; }
     .box-trade > div[style*="grid"] {
         grid-template-columns: 1fr !important;
         gap: 12px !important;
     }
 
-    /* Box padding — tighter but not cramped */
-    .box-action { padding: 12px 13px !important; }
-    .box-trade  { padding: 13px 13px !important; }
-    .box-bull,
-    .box-bear   { padding: 12px 13px !important; }
-    .box-risk   { padding: 9px 12px !important;  }
-
-    /* Larger trade-plan label and value text */
-    .box-trade [style*="0.69em"] { font-size: 0.73em !important; }
-    .box-trade [style*="0.82em"] { font-size: 0.87em !important; }
-
-    /* Conviction card "WHY" body text */
-    .box-action [style*="0.81em"] { font-size: 0.87em !important; }
-
-    /* Category pills — compact */
+    /* Pills */
     .pill     { font-size: 0.63em !important; padding: 2px 7px !important; }
     .pill-cat { font-size: 0.68em !important; padding: 2px 6px !important; }
 
-    /* Category signal panels */
+    /* Category panels */
     .cat-panel  { padding: 10px 11px !important; margin-bottom: 10px !important; }
     .cat-header { margin-bottom: 8px !important; padding-bottom: 6px !important; }
 
-    /* Env banner — slightly tighter */
     .env-banner { padding: 14px 15px !important; margin-bottom: 14px !important; }
-
-    /* Footer — hide on mobile (not useful) */
-    .rs-footer { display: none !important; }
+    .rs-footer  { display: none !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -822,6 +789,47 @@ def portfolio_prescription(
 
     return "", "#607d96"
 
+
+# Per-action visual style: (accent_color, background, icon)
+_ACT_STYLES: dict[str, tuple[str, str, str]] = {
+    "ADD":      ("#00d084", "rgba(0,208,132,0.10)",  "↑"),
+    "BUY MORE": ("#10b981", "rgba(16,185,129,0.09)", "↑"),
+    "HOLD":     ("#0284c7", "rgba(2,132,199,0.08)",  "→"),
+    "TRIM":     ("#f59e0b", "rgba(245,158,11,0.10)",  "↓"),
+    "CUT":      ("#f43f5e", "rgba(244,63,94,0.10)",   "↓↓"),
+    "EXIT":     ("#ef4444", "rgba(239,68,68,0.12)",   "✕"),
+    "UNSCORED": ("#607d96", "rgba(30,42,58,0.50)",    "—"),
+}
+
+
+def _why_signals(action: str, score: float | None, r: dict | None, pnl_pct: float) -> str:
+    """One-sentence reason driving the recommendation, using category scores."""
+    if r is None or score is None:
+        return "Run a scan to score this position"
+    cats = r.get("categories", {})
+    if not cats:
+        return ""
+    sorted_desc = sorted(cats.items(), key=lambda x: x[1], reverse=True)
+    sorted_asc  = sorted(cats.items(), key=lambda x: x[1])
+    top2  = " · ".join(f"{k} {v:.0f}" for k, v in sorted_desc[:2])
+    weak2 = " · ".join(f"{k} {v:.0f}" for k, v in sorted_asc[:2])
+
+    if action in ("ADD", "BUY MORE"):
+        return f"Top signals: {top2}"
+    elif action == "HOLD":
+        if pnl_pct >= 35:
+            return f"Up {pnl_pct:.0f}% — gains limit adding now; score {score:.0f} supports the hold"
+        worst = sorted_asc[0]
+        return f"Score {score:.0f} solid but {worst[0].lower()} ({worst[1]:.0f}) limits conviction to add"
+    elif action == "TRIM":
+        return f"Momentum fading: {weak2} · up {pnl_pct:.0f}% — lock in gains"
+    elif action == "CUT":
+        return f"Weak signals: {weak2} · losses compounding — reduce risk"
+    elif action == "EXIT":
+        return f"Multiple red flags: {weak2} · score {score:.0f} is below threshold"
+    return f"Overall score: {score:.0f}"
+
+
 def make_action_statement(result: dict) -> tuple[str, str, str]:
     score = result["composite"]
     sigs  = result["signals"]
@@ -1118,34 +1126,6 @@ with st.sidebar:
     if _GH_TOKEN:
         st.markdown("**💼 My Portfolio** ☁️")
         st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Synced across devices.")
-        with st.expander("🔧 Cloud Sync Diagnostics", expanded=False):
-            if st.button("Run Connection Test", key="gist_test"):
-                h = _gh_headers()
-                # 1. Check token scopes
-                scope_r = requests.get("https://api.github.com/user", headers=h, timeout=8)
-                if scope_r.ok:
-                    scopes = scope_r.headers.get("X-OAuth-Scopes", "(none listed)")
-                    st.write(f"**Token user:** {scope_r.json().get('login')} | **Scopes:** `{scopes}`")
-                else:
-                    st.error(f"Token invalid — {scope_r.status_code}: {scope_r.text[:200]}")
-                # 2. Find/create gist
-                st.session_state.pop("_gist_id", None)
-                gid = _gist_get_id()
-                st.write(f"**Gist ID:** `{gid}`")
-                if gid:
-                    # 3. Read current content
-                    gr = requests.get(f"https://api.github.com/gists/{gid}", headers=h, timeout=8)
-                    content = gr.json()["files"].get(_GH_GIST_FILE, {}).get("content", "") if gr.ok else ""
-                    st.write(f"**Current Gist content:** `{content[:120] or '(empty)'}` ({len(content)} chars)")
-                    # 4. Try a write
-                    pr = requests.patch(
-                        f"https://api.github.com/gists/{gid}", headers=h, timeout=8,
-                        json={"files": {_GH_GIST_FILE: {"content": content or "[]"}}},
-                    )
-                    if pr.ok:
-                        st.success("Write test passed — token has gist write access")
-                    else:
-                        st.error(f"Write test FAILED — {pr.status_code}: {pr.json().get('message', pr.text[:200])}")
     else:
         st.markdown("**💼 My Portfolio**")
         st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Add `github_token` to secrets to sync across devices.")
@@ -1167,20 +1147,9 @@ with st.sidebar:
                     st.session_state._portfolio_file_id = pf_file_id
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
-                    save_err = _portfolio_save_remote(holdings)
-                    st.session_state._gist_save_err = save_err
+                    _portfolio_save_remote(holdings)
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
-
-    if _GH_TOKEN and not _existing_portfolio:
-        if st.button("☁️ Reload from Cloud", use_container_width=True):
-            st.session_state.pop("_gist_id", None)
-            _remote = _portfolio_load_remote()
-            if _remote:
-                st.session_state.portfolio = _remote
-                st.rerun()
-            else:
-                st.warning("Nothing found in cloud storage.")
 
     if _existing_portfolio:
         tickers_str = ", ".join(h["ticker"] for h in _existing_portfolio)
@@ -1211,13 +1180,6 @@ with st.sidebar:
         )
         if uploaded_pf is not None:
             _handle_pf_upload(uploaded_pf)
-
-    # Show persistent save status
-    if "_gist_save_err" in st.session_state:
-        if st.session_state._gist_save_err:
-            st.error(f"Cloud save failed: {st.session_state._gist_save_err}")
-        else:
-            st.success("Saved to cloud ✓")
 
     portfolio = st.session_state.get("portfolio", [])
 
@@ -1512,17 +1474,6 @@ with tab_portfolio:
 
     if not portfolio:
         st.markdown("### 💼 My Portfolio")
-        if _GH_TOKEN:
-            st.warning(
-                "Cloud sync is active but no portfolio was found. "
-                "Upload your CSV once using the sidebar — it will be saved and restored automatically on every device."
-            )
-        else:
-            st.warning(
-                "Cloud sync is not configured. Your portfolio won't persist across devices or refreshes.\n\n"
-                "To enable it: Streamlit Cloud → your app → **⋮ Settings → Secrets** and add:\n"
-                "```\ngithub_token = \"ghp_your_token_here\"\n```"
-            )
         st.info(
             "Upload your Yahoo Finance portfolio export to see every holding scored, "
             "ranked, and given a specific action (Add / Hold / Trim / Cut).\n\n"
@@ -1585,29 +1536,30 @@ with tab_portfolio:
         pnl_color     = "#00d084" if total_pnl >= 0 else "#f43f5e"
 
         n_live = sum(1 for h in portfolio if h["ticker"] in batch_prices)
-        hdr_col, btn_col = st.columns([5, 1])
-        hdr_col.markdown(
-            f"### 💼 Portfolio Overview "
-            f"<span style='font-size:0.55em;color:#607d96;vertical-align:middle'>"
-            f"{n_live}/{len(portfolio)} prices live</span>",
-            unsafe_allow_html=True,
-        )
-        if btn_col.button("↻ Prices", help="Force-refresh live prices"):
+
+        # ── Portfolio header — Yahoo Finance style ─────────────────────────
+        refresh_col, _ = st.columns([1, 5])
+        if refresh_col.button("↻ Refresh", help="Force-refresh live prices"):
             fetch_live_prices.clear()
             st.rerun()
 
-        if is_mobile:
-            sm1, sm2 = st.columns(2)
-            sm3, sm4 = st.columns(2)
-        else:
-            sm1, sm2, sm3, sm4 = st.columns(4)
-        sm1.metric("Positions", len(portfolio))
-        sm2.metric("Buy Signals", f"{n_buy} / {len(portfolio)}")
-        sm3.metric("Total Value", f"${total_value:,.0f}")
-        sm4.metric(
-            "Unrealized P&L",
-            f"${total_pnl:+,.0f}",
-            delta=f"{total_pnl_pct:+.1f}%",
+        pnl_arrow = "▲" if total_pnl >= 0 else "▼"
+        st.markdown(
+            f"<div style='text-align:center;padding:18px 0 8px'>"
+            f"<div style='font-size:0.7em;color:#607d96;text-transform:uppercase;"
+            f"letter-spacing:0.8px;margin-bottom:4px'>Total Portfolio Value</div>"
+            f"<div style='font-size:2.4em;font-weight:800;color:#f1f5f9;"
+            f"letter-spacing:-1px;line-height:1'>${total_value:,.0f}</div>"
+            f"<div style='font-size:1.05em;font-weight:600;color:{pnl_color};"
+            f"margin-top:6px'>{pnl_arrow} ${abs(total_pnl):,.0f} "
+            f"<span style='font-size:0.82em'>({total_pnl_pct:+.1f}%)"
+            f" unrealized</span></div>"
+            f"<div style='font-size:0.68em;color:#607d96;margin-top:6px'>"
+            f"{n_live}/{len(portfolio)} prices live"
+            f"{' · ' + str(n_buy) + ' buy signal' + ('s' if n_buy != 1 else '') if n_buy else ''}"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
         )
 
         st.divider()
@@ -1634,17 +1586,25 @@ with tab_portfolio:
             pnl_dollar = shares * (live_price - cost_basis)
             pnl_pct    = (live_price / cost_basis - 1) * 100 if cost_basis > 0 else 0.0
             pos_value  = shares * live_price
+            total_cost_pos = shares * cost_basis
+            pos_port_pct = (pos_value / total_value * 100) if total_value > 0 and pos_value > 0 else 0.0
             pnl_color_h = "#00d084" if pnl_dollar >= 0 else "#f43f5e"
-            pnl_sign   = "+" if pnl_dollar >= 0 else "−"
+            pnl_sign    = "+" if pnl_dollar >= 0 else "−"
 
             act_lbl, act_css = portfolio_action(score, pnl_pct)
-            rx_text, rx_color = portfolio_prescription(
+            rx_text, _       = portfolio_prescription(
                 act_lbl, score, shares, cost_basis, live_price, pnl_pct, total_value
             )
-            name   = r.get("name", "")[:28]   if r else h["ticker"]
-            sector = r.get("sector", "")       if r else ""
+            why = _why_signals(act_lbl, score, r, pnl_pct)
+            act_color, act_bg, act_icon = _ACT_STYLES.get(act_lbl, ("#607d96", "rgba(30,42,58,0.5)", "—"))
 
-            # Category score pills
+            name   = r.get("name", "")[:32] if r else h["ticker"]
+            sector = r.get("sector", "")    if r else ""
+
+            tier = 1 if (score or 0) >= 80 else (2 if (score or 0) >= 65 else 3)
+            css  = {1: "rs-card-1", 2: "rs-card-2", 3: "rs-card-3"}[tier]
+
+            # Category pills
             if r:
                 cat_pills = "".join(
                     f"<span class='pill-cat' style='color:{score_color(v)}'>"
@@ -1652,58 +1612,95 @@ with tab_portfolio:
                     for k, v in r["categories"].items()
                 )
             else:
-                cat_pills = "<span style='color:#607d96;font-size:0.75em'>Not yet scored — re-scan to analyze</span>"
+                cat_pills = "<span style='color:#607d96;font-size:0.75em'>Not yet scored — run a scan</span>"
 
-            tier = 1 if (score or 0) >= 80 else (2 if (score or 0) >= 65 else 3)
-            css  = {1: "rs-card-1", 2: "rs-card-2", 3: "rs-card-3"}[tier]
+            # Score chip inside action box
+            score_chip = (
+                f"<span style='font-size:0.68em;background:{act_color}28;color:{act_color};"
+                f"padding:2px 8px;border-radius:4px;font-weight:700;margin-left:6px'>"
+                f"Score {score:.0f}</span>"
+            ) if score is not None else ""
 
-            # Build score block separately to avoid complex f-string conditionals
-            if score is not None:
-                score_block = (
-                    f"<div style='font-size:2em;font-weight:800;color:{sc};line-height:1'>{score:.0f}</div>"
-                    f"<div style='font-size:0.61em;color:#607d96'>/100</div>"
-                )
-            else:
-                score_block = "<div style='font-size:0.80em;color:#607d96;padding-top:4px'>—<br><span style='font-size:0.75em'>unscored</span></div>"
+            # Prescription + why lines (pre-built to keep f-string clean)
+            rx_html = (
+                f"<div style='font-size:0.87em;color:#dcedf5;font-weight:500;"
+                f"line-height:1.4;margin-bottom:5px'>{rx_text}</div>"
+            ) if rx_text else ""
+            why_html = (
+                f"<div style='font-size:0.74em;color:#7092b0;line-height:1.4'>"
+                f"WHY: {why}</div>"
+            ) if why else ""
 
-            # Show "no price" note when price data is missing
+            # Live price / price-unavailable
             if live_price > 0:
-                detail_line = (
-                    f"{shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f}"
-                    f" &nbsp;·&nbsp; live ${live_price:.2f}"
-                    f" &nbsp;·&nbsp; <span style='color:#7092b0'>${pos_value:,.0f} value</span>"
+                price_html = f"<div style='font-size:1.1em;font-weight:700;color:#f1f5f9'>${live_price:,.2f}</div>"
+                detail_html = (
+                    f"{shares:,.2f} sh &nbsp;·&nbsp; avg ${cost_basis:.2f}"
+                    f" &nbsp;·&nbsp; {pos_port_pct:.1f}% of portfolio"
                 )
             else:
-                detail_line = f"{shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f} &nbsp;·&nbsp; <span style='color:#607d96'>price unavailable — re-scan</span>"
+                price_html = "<div style='font-size:0.8em;color:#607d96'>price unavailable</div>"
+                detail_html = f"{shares:,.2f} sh &nbsp;·&nbsp; avg ${cost_basis:.2f}"
 
             st.markdown(
                 f"<div class='{css}'>"
-                f"<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:10px'>"
-                f"<div style='flex:1;min-width:0'>"
-                f"<div style='display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:3px'>"
-                f"<span style='font-size:1.2em;font-weight:800;color:#f1f5f9'>{h['ticker']}</span>"
+
+                # ── Row 1: Ticker + live price ─────────────────────────────
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:flex-start;margin-bottom:2px'>"
+                f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
+                f"<span style='font-size:1.3em;font-weight:800;color:#f1f5f9;"
+                f"letter-spacing:-0.4px'>{h['ticker']}</span>"
                 f"<span class='badge {act_css}'>{act_lbl}</span>"
                 f"</div>"
-                f"<div style='color:#7092b0;font-size:0.74em;margin-bottom:9px'>{name}{' · ' + sector if sector else ''}</div>"
-                f"<div style='background:#0b1119;border-radius:7px;padding:9px 11px;margin-bottom:9px'>"
-                f"<div style='display:flex;align-items:baseline;gap:8px;flex-wrap:wrap'>"
-                f"<span style='color:{pnl_color_h};font-size:1.05em;font-weight:700'>{pnl_sign}${abs(pnl_dollar):,.0f}</span>"
-                f"<span style='color:{pnl_color_h};font-size:0.82em'>({pnl_pct:+.1f}%)</span>"
-                f"<span style='color:#607d96;font-size:0.70em'>unrealized</span>"
+                f"<div style='text-align:right;flex-shrink:0'>"
+                f"{price_html}"
+                f"<div style='font-size:0.76em;color:{pnl_color_h};font-weight:600'>"
+                f"{pnl_sign}${abs(pnl_dollar):,.0f} ({pnl_pct:+.1f}%)</div>"
                 f"</div>"
-                f"<div style='font-size:0.72em;color:#607d96;margin-top:5px'>{detail_line}</div>"
                 f"</div>"
-                + (
-                f"<div style='margin:6px 0 8px;padding:7px 11px;background:rgba(0,0,0,0.2);"
-                f"border-radius:7px;border-left:3px solid {rx_color}'>"
-                f"<span style='font-size:0.78em;color:{rx_color};font-weight:600'>→ </span>"
-                f"<span style='font-size:0.78em;color:#c8d8e8'>{rx_text}</span>"
-                f"</div>" if rx_text else ""
-                ) +
-                f"<div style='margin-bottom:6px;line-height:2.0'>{cat_pills}</div>"
+
+                # ── Row 2: Company + sector ────────────────────────────────
+                f"<div style='color:#7092b0;font-size:0.72em;margin-bottom:11px'>"
+                f"{name}{' · ' + sector if sector else ''}</div>"
+
+                # ── Row 3: Value vs cost ───────────────────────────────────
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:flex-end;margin-bottom:5px'>"
+                f"<div>"
+                f"<div style='font-size:0.62em;color:#607d96;text-transform:uppercase;"
+                f"letter-spacing:0.5px;margin-bottom:1px'>Market Value</div>"
+                f"<div style='font-size:1.12em;font-weight:700;color:#e2e8f0'>"
+                f"${pos_value:,.0f}</div>"
                 f"</div>"
-                f"<div style='text-align:right;flex-shrink:0'>{score_block}</div>"
+                f"<div style='text-align:right'>"
+                f"<div style='font-size:0.62em;color:#607d96;text-transform:uppercase;"
+                f"letter-spacing:0.5px;margin-bottom:1px'>Cost Basis</div>"
+                f"<div style='font-size:1.0em;font-weight:600;color:#7092b0'>"
+                f"${total_cost_pos:,.0f}</div>"
                 f"</div>"
+                f"</div>"
+
+                # ── Row 4: Detail line ─────────────────────────────────────
+                f"<div style='font-size:0.70em;color:#607d96;margin-bottom:12px;"
+                f"padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.05)'>"
+                f"{detail_html}</div>"
+
+                # ── Row 5: Action box ──────────────────────────────────────
+                f"<div style='background:{act_bg};border-radius:10px;"
+                f"border-left:4px solid {act_color};padding:12px 14px;margin-bottom:10px'>"
+                f"<div style='display:flex;align-items:center;margin-bottom:5px'>"
+                f"<span style='font-size:1.05em;font-weight:800;color:{act_color}'>"
+                f"{act_icon} {act_lbl}</span>"
+                f"{score_chip}"
+                f"</div>"
+                f"{rx_html}"
+                f"{why_html}"
+                f"</div>"
+
+                # ── Row 6: Category pills ──────────────────────────────────
+                f"<div style='line-height:2.1'>{cat_pills}</div>"
+
                 f"</div>",
                 unsafe_allow_html=True,
             )
