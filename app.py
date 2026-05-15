@@ -958,7 +958,11 @@ with tab_scout:
         user_tickers = [t.strip().upper() for t in
                         st.session_state.get("user_watchlist_raw", "").split(",") if t.strip()]
         pf_tickers = [h["ticker"] for h in st.session_state.get("portfolio", [])]
-        universe = build_dynamic_universe(user_tickers=user_tickers, portfolio_tickers=pf_tickers)
+        universe = build_dynamic_universe(user_tickers=user_tickers)
+        # Layer 6 — portfolio tickers (applied here to avoid signature dependency)
+        for _t in pf_tickers:
+            if _t:
+                universe[_t] = "Your Portfolio"
         st.session_state.last_universe = universe
 
         results = two_pass_scan(universe, progress_callback=auto_progress, deep_n=30)

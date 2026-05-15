@@ -128,19 +128,13 @@ def get_sp500_top_performers() -> list[str]:
         return []
 
 
-def build_dynamic_universe(
-    user_tickers: list[str] | None = None,
-    portfolio_tickers: list[str] | None = None,
-) -> dict[str, str]:
+def build_dynamic_universe(user_tickers: list[str] | None = None) -> dict[str, str]:
     """
     Assemble the full auto-scout universe.
 
     Returns a dict  {ticker: source_label}  so callers know where each
     stock came from.  Tickers added by multiple layers keep the first
     (highest-priority) label.
-
-    Layer 6 (portfolio) always overrides lower-priority labels so holdings
-    are never silently dropped by the source-deduplication logic.
     """
     universe: dict[str, str] = {}
 
@@ -168,12 +162,6 @@ def build_dynamic_universe(
         t = raw.strip().upper()
         if t and _TICKER_RE.match(t):
             universe[t] = "Your Watchlist"
-
-    # Layer 6 — imported portfolio (highest priority — always override)
-    for raw in (portfolio_tickers or []):
-        t = raw.strip().upper()
-        if t and _TICKER_RE.match(t):
-            universe[t] = "Your Portfolio"
 
     return universe
 
