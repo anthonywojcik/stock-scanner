@@ -339,6 +339,7 @@ _SOURCE_ICONS = {
     "Momentum Leader":     "📈",
     "S&P Top Performer":   "🏆",
     "Your Watchlist":      "⭐",
+    "Your Portfolio":      "💼",
 }
 
 
@@ -425,6 +426,81 @@ def trade_plan(result: dict) -> dict:
         "upside_pct":  upside_pct,
         "rr":          rr,
     }
+
+def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
+    """
+    Parse a Yahoo Finance portfolio export CSV into a list of holding dicts.
+    Returns None if the CSV doesn't contain holdings data (e.g. a watchlist export).
+    Multiple lots of the same ticker are aggregated with weighted-average cost basis.
+    """
+    df.columns = [str(c).strip() for c in df.columns]
+    if "Symbol" not in df.columns or "Quantity" not in df.columns:
+        return None
+
+    def _f(val) -> float:
+        try:
+            return float(str(val).replace(",", "").replace("$", "").strip())
+        except (ValueError, TypeError):
+            return 0.0
+
+    lots: list[dict] = []
+    for _, row in df.iterrows():
+        ticker = str(row.get("Symbol", "")).strip().upper()
+        if not ticker or ticker in ("NAN", "SYMBOL"):
+            continue
+        qty = _f(row.get("Quantity", 0))
+        if qty <= 0:
+            continue
+        lots.append({
+            "ticker":            ticker,
+            "shares":            qty,
+            "cost_basis":        _f(row.get("Purchase Price", 0)),
+            "current_price_csv": _f(row.get("Current Price", row.get("Last Price", 0))),
+        })
+
+    if not lots:
+        return None
+
+    # Aggregate multiple lots — weighted-average cost basis
+    agg: dict = {}
+    for h in lots:
+        t = h["ticker"]
+        if t not in agg:
+            agg[t] = {"shares": 0.0, "cost_total": 0.0, "current_price_csv": 0.0}
+        agg[t]["shares"]        += h["shares"]
+        agg[t]["cost_total"]    += h["shares"] * h["cost_basis"]
+        agg[t]["current_price_csv"] = h["current_price_csv"]
+
+    return sorted(
+        [
+            {
+                "ticker":            t,
+                "shares":            d["shares"],
+                "cost_basis":        d["cost_total"] / d["shares"] if d["shares"] else 0.0,
+                "current_price_csv": d["current_price_csv"],
+            }
+            for t, d in agg.items()
+        ],
+        key=lambda x: x["ticker"],
+    )
+
+def portfolio_action(score: float | None, pnl_pct: float) -> tuple[str, str]:
+    """Return (label, badge_css) recommendation for a held position."""
+    if score is None:
+        return "UNSCORED", "badge-hold"
+    if score >= 80 and pnl_pct < 15:
+        return "ADD", "badge-now"
+    if score >= 72 and pnl_pct < 35:
+        return "BUY MORE", "badge-buy"
+    if score >= 65:
+        return "HOLD", "badge-scale"
+    if score < 55 and pnl_pct > 20:
+        return "TRIM", "badge-watch"
+    if score < 50 and pnl_pct < -10:
+        return "CUT", "badge-hold"
+    if score < 40:
+        return "EXIT", "badge-hold"
+    return "HOLD", "badge-scale"
 
 def make_action_statement(result: dict) -> tuple[str, str, str]:
     score = result["composite"]
@@ -718,9 +794,50 @@ with st.sidebar:
 
     st.divider()
 
+    # Portfolio import — Yahoo Finance CSV
+    st.markdown("**💼 My Portfolio**")
+    st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here.")
+    uploaded_pf = st.file_uploader(
+        "Upload Yahoo Finance export (.csv)",
+        type="csv",
+        label_visibility="collapsed",
+    )
+    if uploaded_pf is not None:
+        pf_file_id = f"{uploaded_pf.name}:{uploaded_pf.size}"
+        if st.session_state.get("_portfolio_file_id") != pf_file_id:
+            try:
+                df_pf = pd.read_csv(uploaded_pf)
+                holdings = parse_yahoo_portfolio(df_pf)
+                if holdings is None:
+                    st.error(
+                        "This looks like a Watchlist export (no quantity/price data). "
+                        "Export from your **Portfolio** page instead."
+                    )
+                else:
+                    st.session_state.portfolio         = holdings
+                    st.session_state._portfolio_file_id = pf_file_id
+                    st.session_state.auto_scan_complete = False
+                    st.session_state.auto_results       = []
+                    st.success(f"Loaded {len(holdings)} positions from {uploaded_pf.name}")
+            except Exception as exc:
+                st.error(f"Could not parse CSV: {exc}")
+
+    portfolio = st.session_state.get("portfolio", [])
+    if portfolio:
+        tickers_str = ", ".join(h["ticker"] for h in portfolio)
+        st.caption(f"{len(portfolio)} positions: {tickers_str[:80]}{'…' if len(tickers_str) > 80 else ''}")
+        if st.button("🗑 Clear Portfolio", use_container_width=True):
+            st.session_state.portfolio          = []
+            st.session_state._portfolio_file_id = None
+            st.session_state.auto_scan_complete = False
+            st.session_state.auto_results       = []
+            st.rerun()
+
+    st.divider()
+
     # Watchlist
     st.markdown("**⭐ Watchlist**")
-    st.caption("Always included in every auto-scout scan.")
+    st.caption("Extra tickers to always include in every scan.")
     watchlist_raw = st.text_area(
         "Tickers",
         value=st.session_state.get("user_watchlist_raw", ""),
@@ -807,11 +924,11 @@ else:
     )
 
 _tab_labels = (
-    ["🏆 Picks", "📊 Analysis", "🌊 Market", "🔍 Scan"]
+    ["🏆 Picks", "💼 Portfolio", "📊 Analysis", "🌊 Market", "🔍 Scan"]
     if is_mobile else
-    ["🏆 Top Picks", "📊 Deep Dive", "🌊 Market", "🔍 Custom Scan"]
+    ["🏆 Top Picks", "💼 Portfolio", "📊 Deep Dive", "🌊 Market", "🔍 Custom Scan"]
 )
-tab_scout, tab_analysis, tab_market, tab_custom = st.tabs(_tab_labels)
+tab_scout, tab_portfolio, tab_analysis, tab_market, tab_custom = st.tabs(_tab_labels)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -838,7 +955,8 @@ with tab_scout:
 
         user_tickers = [t.strip().upper() for t in
                         st.session_state.get("user_watchlist_raw", "").split(",") if t.strip()]
-        universe = build_dynamic_universe(user_tickers=user_tickers)
+        pf_tickers = [h["ticker"] for h in st.session_state.get("portfolio", [])]
+        universe = build_dynamic_universe(user_tickers=user_tickers, portfolio_tickers=pf_tickers)
         st.session_state.last_universe = universe
 
         results = two_pass_scan(universe, progress_callback=auto_progress, deep_n=30)
@@ -994,7 +1112,148 @@ with tab_scout:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — DEEP DIVE
+# TAB 2 — PORTFOLIO
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_portfolio:
+    portfolio = st.session_state.get("portfolio", [])
+
+    if not portfolio:
+        st.markdown("### 💼 My Portfolio")
+        st.info(
+            "Upload your Yahoo Finance portfolio export to see every holding scored, "
+            "ranked, and given a specific action (Add / Hold / Trim / Cut).\n\n"
+            "**How to export:** Yahoo Finance → Finance → Portfolios → select your portfolio "
+            "→ click the **Export** icon (top right of the holdings table) → upload the CSV in the sidebar."
+        )
+    else:
+        # Build a lookup: ticker → scored result (from the last auto-scan)
+        auto_results = st.session_state.get("auto_results", [])
+        scored_map: dict[str, dict] = {r["ticker"]: r for r in auto_results}
+
+        unscored = [h["ticker"] for h in portfolio if h["ticker"] not in scored_map]
+        if unscored:
+            st.warning(
+                f"{len(unscored)} holding(s) haven't been scanned yet: "
+                f"**{', '.join(unscored[:8])}{'…' if len(unscored) > 8 else ''}**. "
+                "Click **Re-Scan Now** in the sidebar to score them."
+            )
+
+        # ── Portfolio summary ──────────────────────────────────────────────────
+        total_cost  = 0.0
+        total_value = 0.0
+        for h in portfolio:
+            r = scored_map.get(h["ticker"])
+            live_price = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0.0
+            total_cost  += h["shares"] * h["cost_basis"]
+            total_value += h["shares"] * live_price
+
+        total_pnl     = total_value - total_cost
+        total_pnl_pct = (total_value / total_cost - 1) * 100 if total_cost > 0 else 0.0
+        pnl_color     = "#00d084" if total_pnl >= 0 else "#f43f5e"
+        n_buy         = sum(1 for h in portfolio
+                            if scored_map.get(h["ticker"], {}).get("is_buy"))
+
+        st.markdown("### 💼 Portfolio Overview")
+        if is_mobile:
+            sm1, sm2 = st.columns(2)
+            sm3, sm4 = st.columns(2)
+        else:
+            sm1, sm2, sm3, sm4 = st.columns(4)
+        sm1.metric("Positions", len(portfolio))
+        sm2.metric("Buy Signals", f"{n_buy} / {len(portfolio)}")
+        sm3.metric("Total Value", f"${total_value:,.0f}")
+        sm4.metric(
+            "Unrealized P&L",
+            f"${total_pnl:+,.0f}",
+            delta=f"{total_pnl_pct:+.1f}%",
+        )
+
+        st.divider()
+
+        # ── Position cards — sorted: ADD first, EXIT last ──────────────────────
+        def _sort_key(h):
+            r = scored_map.get(h["ticker"])
+            score = r["composite"] if r else -1
+            live  = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0
+            pnl_p = (live / h["cost_basis"] - 1) * 100 if h["cost_basis"] > 0 else 0
+            lbl, _ = portfolio_action(score if r else None, pnl_p)
+            order  = {"ADD": 0, "BUY MORE": 1, "HOLD": 2, "TRIM": 3, "CUT": 4, "EXIT": 5, "UNSCORED": 6}
+            return order.get(lbl, 7)
+
+        sorted_portfolio = sorted(portfolio, key=_sort_key)
+
+        for h in sorted_portfolio:
+            r          = scored_map.get(h["ticker"])
+            score      = r["composite"] if r else None
+            sc         = score_color(score) if score is not None else "#607d96"
+            live_price = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0.0
+            cost_basis = h["cost_basis"]
+            shares     = h["shares"]
+            pnl_dollar = shares * (live_price - cost_basis)
+            pnl_pct    = (live_price / cost_basis - 1) * 100 if cost_basis > 0 else 0.0
+            pos_value  = shares * live_price
+            pnl_color_h = "#00d084" if pnl_dollar >= 0 else "#f43f5e"
+            pnl_sign   = "+" if pnl_dollar >= 0 else "−"
+
+            act_lbl, act_css = portfolio_action(score, pnl_pct)
+            name   = r.get("name", "")[:28]   if r else h["ticker"]
+            sector = r.get("sector", "")       if r else ""
+
+            # Category score pills
+            if r:
+                cat_pills = "".join(
+                    f"<span class='pill-cat' style='color:{score_color(v)}'>"
+                    f"{CAT_ICONS.get(k,'')} {k[:4]} {v:.0f}</span>"
+                    for k, v in r["categories"].items()
+                )
+            else:
+                cat_pills = "<span style='color:#607d96;font-size:0.75em'>Not yet scored — re-scan to analyze</span>"
+
+            tier = 1 if (score or 0) >= 80 else (2 if (score or 0) >= 65 else 3)
+            css  = {1: "rs-card-1", 2: "rs-card-2", 3: "rs-card-3"}[tier]
+
+            st.markdown(f"""
+<div class='{css}'>
+  <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:10px'>
+    <div style='flex:1;min-width:0'>
+
+      <div style='display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:3px'>
+        <span style='font-size:1.2em;font-weight:800;color:#f1f5f9'>{h["ticker"]}</span>
+        <span class='badge {act_css}'>{act_lbl}</span>
+      </div>
+      <div style='color:#7092b0;font-size:0.74em;margin-bottom:9px'>{name}{" · " + sector if sector else ""}</div>
+
+      <div style='background:#0b1119;border-radius:7px;padding:9px 11px;margin-bottom:9px'>
+        <div style='display:flex;align-items:baseline;gap:8px;flex-wrap:wrap'>
+          <span style='color:{pnl_color_h};font-size:1.05em;font-weight:700'>{pnl_sign}${abs(pnl_dollar):,.0f}</span>
+          <span style='color:{pnl_color_h};font-size:0.82em'>({pnl_pct:+.1f}%)</span>
+          <span style='color:#607d96;font-size:0.70em'>unrealized</span>
+        </div>
+        <div style='font-size:0.72em;color:#607d96;margin-top:5px'>
+          {shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f}
+          &nbsp;·&nbsp; live ${live_price:.2f}
+          &nbsp;·&nbsp; <span style='color:#7092b0'>${pos_value:,.0f} value</span>
+        </div>
+      </div>
+
+      <div style='margin-bottom:6px;line-height:2.0'>{cat_pills}</div>
+    </div>
+
+    <div style='text-align:right;flex-shrink:0'>
+      {"<div style='font-size:2em;font-weight:800;color:" + sc + ";line-height:1'>" + f"{score:.0f}" + "</div><div style='font-size:0.61em;color:#607d96'>/100</div>"
+        if score is not None else
+        "<div style='font-size:0.80em;color:#607d96;padding-top:4px'>—<br><span style='font-size:0.80em'>unscored</span></div>"}
+    </div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+            if r and st.button("Full Analysis →", key=f"pf_{h['ticker']}", use_container_width=True):
+                st.session_state.selected_result      = r
+                st.session_state.navigate_to_analysis = True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — DEEP DIVE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_analysis:
     result = st.session_state.get("selected_result")
