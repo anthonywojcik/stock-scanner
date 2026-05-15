@@ -235,8 +235,10 @@ def _check_password() -> bool:
         pwd = st.text_input("Password", type="password", placeholder="Enter password",
                             label_visibility="collapsed")
         if st.button("Sign in", type="primary", use_container_width=True):
-            expected = st.secrets.get("password", "")
-            if expected and hmac.compare_digest(pwd.encode(), expected.encode()):
+            expected = st.secrets.get("password", "").strip()
+            if not expected:
+                st.error("App secret not configured. Add `password = \"yourpassword\"` in Streamlit Cloud → App Settings → Secrets.")
+            elif hmac.compare_digest(pwd.strip().encode(), expected.encode()):
                 st.session_state.authenticated = True
                 st.rerun()
             else:
