@@ -429,6 +429,8 @@ def trade_plan(result: dict) -> dict:
         "rr":          rr,
     }
 
+_TICKER_VALID = __import__("re").compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+
 def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
     Parse a Yahoo Finance portfolio export CSV into a list of holding dicts.
@@ -440,15 +442,18 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
         return None
 
     def _f(val) -> float:
+        """Parse a numeric cell; returns 0.0 for blanks, non-numeric, or NaN."""
         try:
-            return float(str(val).replace(",", "").replace("$", "").strip())
+            f = float(str(val).replace(",", "").replace("$", "").strip())
+            return 0.0 if f != f else f  # f != f is True only for NaN
         except (ValueError, TypeError):
             return 0.0
 
     lots: list[dict] = []
     for _, row in df.iterrows():
         ticker = str(row.get("Symbol", "")).strip().upper()
-        if not ticker or ticker in ("NAN", "SYMBOL"):
+        # Skip cash rows ($$CASH_TX etc.), header echoes, and non-ticker symbols
+        if not ticker or not _TICKER_VALID.match(ticker):
             continue
         qty = _f(row.get("Quantity", 0))
         if qty <= 0:
@@ -1147,9 +1152,18 @@ with tab_portfolio:
         # ── Portfolio summary ──────────────────────────────────────────────────
         total_cost  = 0.0
         total_value = 0.0
+        def _live(h: dict, r: dict | None) -> float:
+            """Return a clean live price: scored result first, CSV fallback, then 0."""
+            p = r["price"] if r and r.get("price") else h["current_price_csv"]
+            try:
+                f = float(p or 0)
+                return f if f == f and f > 0 else 0.0  # f != f catches NaN
+            except (TypeError, ValueError):
+                return 0.0
+
         for h in portfolio:
             r = scored_map.get(h["ticker"])
-            live_price = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0.0
+            live_price = _live(h, r)
             total_cost  += h["shares"] * h["cost_basis"]
             total_value += h["shares"] * live_price
 
@@ -1178,10 +1192,10 @@ with tab_portfolio:
 
         # ── Position cards — sorted: ADD first, EXIT last ──────────────────────
         def _sort_key(h):
-            r = scored_map.get(h["ticker"])
+            r     = scored_map.get(h["ticker"])
             score = r["composite"] if r else -1
-            live  = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0
-            pnl_p = (live / h["cost_basis"] - 1) * 100 if h["cost_basis"] > 0 else 0
+            live  = _live(h, r)
+            pnl_p = (live / h["cost_basis"] - 1) * 100 if h["cost_basis"] > 0 and live > 0 else 0
             lbl, _ = portfolio_action(score if r else None, pnl_p)
             order  = {"ADD": 0, "BUY MORE": 1, "HOLD": 2, "TRIM": 3, "CUT": 4, "EXIT": 5, "UNSCORED": 6}
             return order.get(lbl, 7)
@@ -1192,7 +1206,7 @@ with tab_portfolio:
             r          = scored_map.get(h["ticker"])
             score      = r["composite"] if r else None
             sc         = score_color(score) if score is not None else "#607d96"
-            live_price = (r["price"] if r and r.get("price") else h["current_price_csv"]) or 0.0
+            live_price = _live(h, r)
             cost_basis = h["cost_basis"]
             shares     = h["shares"]
             pnl_dollar = shares * (live_price - cost_basis)
@@ -1218,40 +1232,49 @@ with tab_portfolio:
             tier = 1 if (score or 0) >= 80 else (2 if (score or 0) >= 65 else 3)
             css  = {1: "rs-card-1", 2: "rs-card-2", 3: "rs-card-3"}[tier]
 
-            st.markdown(f"""
-<div class='{css}'>
-  <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:10px'>
-    <div style='flex:1;min-width:0'>
+            # Build score block separately to avoid complex f-string conditionals
+            if score is not None:
+                score_block = (
+                    f"<div style='font-size:2em;font-weight:800;color:{sc};line-height:1'>{score:.0f}</div>"
+                    f"<div style='font-size:0.61em;color:#607d96'>/100</div>"
+                )
+            else:
+                score_block = "<div style='font-size:0.80em;color:#607d96;padding-top:4px'>—<br><span style='font-size:0.75em'>unscored</span></div>"
 
-      <div style='display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:3px'>
-        <span style='font-size:1.2em;font-weight:800;color:#f1f5f9'>{h["ticker"]}</span>
-        <span class='badge {act_css}'>{act_lbl}</span>
-      </div>
-      <div style='color:#7092b0;font-size:0.74em;margin-bottom:9px'>{name}{" · " + sector if sector else ""}</div>
+            # Show "no price" note when price data is missing
+            if live_price > 0:
+                detail_line = (
+                    f"{shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f}"
+                    f" &nbsp;·&nbsp; live ${live_price:.2f}"
+                    f" &nbsp;·&nbsp; <span style='color:#7092b0'>${pos_value:,.0f} value</span>"
+                )
+            else:
+                detail_line = f"{shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f} &nbsp;·&nbsp; <span style='color:#607d96'>price unavailable — re-scan</span>"
 
-      <div style='background:#0b1119;border-radius:7px;padding:9px 11px;margin-bottom:9px'>
-        <div style='display:flex;align-items:baseline;gap:8px;flex-wrap:wrap'>
-          <span style='color:{pnl_color_h};font-size:1.05em;font-weight:700'>{pnl_sign}${abs(pnl_dollar):,.0f}</span>
-          <span style='color:{pnl_color_h};font-size:0.82em'>({pnl_pct:+.1f}%)</span>
-          <span style='color:#607d96;font-size:0.70em'>unrealized</span>
-        </div>
-        <div style='font-size:0.72em;color:#607d96;margin-top:5px'>
-          {shares:.2f} sh &nbsp;·&nbsp; cost ${cost_basis:.2f}
-          &nbsp;·&nbsp; live ${live_price:.2f}
-          &nbsp;·&nbsp; <span style='color:#7092b0'>${pos_value:,.0f} value</span>
-        </div>
-      </div>
-
-      <div style='margin-bottom:6px;line-height:2.0'>{cat_pills}</div>
-    </div>
-
-    <div style='text-align:right;flex-shrink:0'>
-      {"<div style='font-size:2em;font-weight:800;color:" + sc + ";line-height:1'>" + f"{score:.0f}" + "</div><div style='font-size:0.61em;color:#607d96'>/100</div>"
-        if score is not None else
-        "<div style='font-size:0.80em;color:#607d96;padding-top:4px'>—<br><span style='font-size:0.80em'>unscored</span></div>"}
-    </div>
-  </div>
-</div>""", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='{css}'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:10px'>"
+                f"<div style='flex:1;min-width:0'>"
+                f"<div style='display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:3px'>"
+                f"<span style='font-size:1.2em;font-weight:800;color:#f1f5f9'>{h['ticker']}</span>"
+                f"<span class='badge {act_css}'>{act_lbl}</span>"
+                f"</div>"
+                f"<div style='color:#7092b0;font-size:0.74em;margin-bottom:9px'>{name}{' · ' + sector if sector else ''}</div>"
+                f"<div style='background:#0b1119;border-radius:7px;padding:9px 11px;margin-bottom:9px'>"
+                f"<div style='display:flex;align-items:baseline;gap:8px;flex-wrap:wrap'>"
+                f"<span style='color:{pnl_color_h};font-size:1.05em;font-weight:700'>{pnl_sign}${abs(pnl_dollar):,.0f}</span>"
+                f"<span style='color:{pnl_color_h};font-size:0.82em'>({pnl_pct:+.1f}%)</span>"
+                f"<span style='color:#607d96;font-size:0.70em'>unrealized</span>"
+                f"</div>"
+                f"<div style='font-size:0.72em;color:#607d96;margin-top:5px'>{detail_line}</div>"
+                f"</div>"
+                f"<div style='margin-bottom:6px;line-height:2.0'>{cat_pills}</div>"
+                f"</div>"
+                f"<div style='text-align:right;flex-shrink:0'>{score_block}</div>"
+                f"</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
             if r and st.button("Full Analysis →", key=f"pf_{h['ticker']}", use_container_width=True):
                 st.session_state.selected_result      = r
