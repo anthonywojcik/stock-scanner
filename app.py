@@ -6,6 +6,7 @@ import hmac
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -430,6 +431,28 @@ def trade_plan(result: dict) -> dict:
     }
 
 _TICKER_VALID = __import__("re").compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_live_prices(tickers: tuple) -> dict[str, float]:
+    """Batch-download current closing prices for a tuple of tickers. Cached 5 min."""
+    if not tickers:
+        return {}
+    try:
+        raw = yf.download(list(tickers), period="2d", auto_adjust=True,
+                          progress=False, threads=True)
+        if raw.empty:
+            return {}
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+        prices: dict[str, float] = {}
+        for t in tickers:
+            col = close[t].dropna() if t in close.columns else pd.Series(dtype=float)
+            if col.empty and len(tickers) == 1:
+                col = close.squeeze().dropna()
+            if not col.empty:
+                prices[t] = round(float(col.iloc[-1]), 4)
+        return prices
+    except Exception:
+        return {}
 
 def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
@@ -1151,18 +1174,28 @@ with tab_portfolio:
                 "Click **Re-Scan Now** in the sidebar to score them."
             )
 
+        # ── Batch-fetch fresh prices for every portfolio ticker ────────────────
+        all_pf_tickers = tuple(h["ticker"] for h in portfolio)
+        batch_prices = fetch_live_prices(all_pf_tickers)
+
+        def _live(h: dict, r: dict | None) -> float:
+            """Live price priority: batch yfinance → scan result → CSV snapshot."""
+            for candidate in (
+                batch_prices.get(h["ticker"]),
+                r["price"] if r and r.get("price") else None,
+                h["current_price_csv"],
+            ):
+                try:
+                    f = float(candidate or 0)
+                    if f > 0 and f == f:   # f != f catches NaN
+                        return f
+                except (TypeError, ValueError):
+                    pass
+            return 0.0
+
         # ── Portfolio summary ──────────────────────────────────────────────────
         total_cost  = 0.0
         total_value = 0.0
-        def _live(h: dict, r: dict | None) -> float:
-            """Return a clean live price: scored result first, CSV fallback, then 0."""
-            p = r["price"] if r and r.get("price") else h["current_price_csv"]
-            try:
-                f = float(p or 0)
-                return f if f == f and f > 0 else 0.0  # f != f catches NaN
-            except (TypeError, ValueError):
-                return 0.0
-
         for h in portfolio:
             r = scored_map.get(h["ticker"])
             live_price = _live(h, r)
