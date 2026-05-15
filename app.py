@@ -34,7 +34,11 @@ def navigate_to_tab(label: str):
         function clickTab() {{
             var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
             for (var t of tabs) {{
-                if (t.innerText.trim().indexOf({repr(label)}) !== -1) {{ t.click(); return; }}
+                if (t.innerText.trim().indexOf({repr(label)}) !== -1) {{
+                    t.click();
+                    window.parent.scrollTo({{top: 0, behavior: 'smooth'}});
+                    return;
+                }}
             }}
         }}
         setTimeout(clickTab, 120);
