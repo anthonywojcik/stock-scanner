@@ -1117,6 +1117,34 @@ with st.sidebar:
     if _GH_TOKEN:
         st.markdown("**💼 My Portfolio** ☁️")
         st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Synced across devices.")
+        with st.expander("🔧 Cloud Sync Diagnostics", expanded=False):
+            if st.button("Run Connection Test", key="gist_test"):
+                h = _gh_headers()
+                # 1. Check token scopes
+                scope_r = requests.get("https://api.github.com/user", headers=h, timeout=8)
+                if scope_r.ok:
+                    scopes = scope_r.headers.get("X-OAuth-Scopes", "(none listed)")
+                    st.write(f"**Token user:** {scope_r.json().get('login')} | **Scopes:** `{scopes}`")
+                else:
+                    st.error(f"Token invalid — {scope_r.status_code}: {scope_r.text[:200]}")
+                # 2. Find/create gist
+                st.session_state.pop("_gist_id", None)
+                gid = _gist_get_id()
+                st.write(f"**Gist ID:** `{gid}`")
+                if gid:
+                    # 3. Read current content
+                    gr = requests.get(f"https://api.github.com/gists/{gid}", headers=h, timeout=8)
+                    content = gr.json()["files"].get(_GH_GIST_FILE, {}).get("content", "") if gr.ok else ""
+                    st.write(f"**Current Gist content:** `{content[:120] or '(empty)'}` ({len(content)} chars)")
+                    # 4. Try a write
+                    pr = requests.patch(
+                        f"https://api.github.com/gists/{gid}", headers=h, timeout=8,
+                        json={"files": {_GH_GIST_FILE: {"content": content or "[]"}}},
+                    )
+                    if pr.ok:
+                        st.success("Write test passed — token has gist write access")
+                    else:
+                        st.error(f"Write test FAILED — {pr.status_code}: {pr.json().get('message', pr.text[:200])}")
     else:
         st.markdown("**💼 My Portfolio**")
         st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Add `github_token` to secrets to sync across devices.")
@@ -1139,10 +1167,7 @@ with st.sidebar:
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
                     save_err = _portfolio_save_remote(holdings)
-                    if save_err:
-                        st.warning(f"Loaded locally but cloud save failed: {save_err}")
-                    else:
-                        st.success(f"Loaded {len(holdings)} positions · saved to cloud")
+                    st.session_state._gist_save_err = save_err
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
 
@@ -1185,6 +1210,13 @@ with st.sidebar:
         )
         if uploaded_pf is not None:
             _handle_pf_upload(uploaded_pf)
+
+    # Show persistent save status
+    if "_gist_save_err" in st.session_state:
+        if st.session_state._gist_save_err:
+            st.error(f"Cloud save failed: {st.session_state._gist_save_err}")
+        else:
+            st.success("Saved to cloud ✓")
 
     portfolio = st.session_state.get("portfolio", [])
 
