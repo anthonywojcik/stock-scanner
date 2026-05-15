@@ -1137,9 +1137,10 @@ with tab_portfolio:
             "→ click the **Export** icon (top right of the holdings table) → upload the CSV in the sidebar."
         )
     else:
-        # Build a lookup: ticker → scored result (from the last auto-scan)
+        # Build a lookup: ticker → scored result (auto-scan + any manual Deep Dive analyses)
         auto_results = st.session_state.get("auto_results", [])
         scored_map: dict[str, dict] = {r["ticker"]: r for r in auto_results}
+        scored_map.update(st.session_state.get("manual_scores", {}))
 
         unscored = [h["ticker"] for h in portfolio if h["ticker"] not in scored_map]
         if unscored:
@@ -1313,6 +1314,10 @@ with tab_analysis:
             )
             if result:
                 st.session_state.selected_result = result
+                # Also cache so the Portfolio tab can see it
+                ms = st.session_state.get("manual_scores", {})
+                ms[result["ticker"]] = result
+                st.session_state.manual_scores = ms
             else:
                 st.error(f"Could not fetch data for **{ticker_upper}**. Check the ticker symbol and try again.")
                 result = None
