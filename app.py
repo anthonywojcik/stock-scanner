@@ -1116,12 +1116,9 @@ with st.sidebar:
     else:
         st.markdown("**💼 My Portfolio**")
         st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Add `github_token` to secrets to sync across devices.")
-    uploaded_pf = st.file_uploader(
-        "Upload Yahoo Finance export (.csv)",
-        type="csv",
-        label_visibility="collapsed",
-    )
-    if uploaded_pf is not None:
+    _existing_portfolio = st.session_state.get("portfolio", [])
+
+    def _handle_pf_upload(uploaded_pf):
         pf_file_id = f"{uploaded_pf.name}:{uploaded_pf.size}"
         if st.session_state.get("_portfolio_file_id") != pf_file_id:
             try:
@@ -1133,7 +1130,7 @@ with st.sidebar:
                         "Export from your **Portfolio** page instead."
                     )
                 else:
-                    st.session_state.portfolio         = holdings
+                    st.session_state.portfolio          = holdings
                     st.session_state._portfolio_file_id = pf_file_id
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
@@ -1142,17 +1139,37 @@ with st.sidebar:
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
 
-    portfolio = st.session_state.get("portfolio", [])
-    if portfolio:
-        tickers_str = ", ".join(h["ticker"] for h in portfolio)
-        st.caption(f"{len(portfolio)} positions: {tickers_str[:80]}{'…' if len(tickers_str) > 80 else ''}")
-        if st.button("🗑 Clear Portfolio", use_container_width=True):
+    if _existing_portfolio:
+        tickers_str = ", ".join(h["ticker"] for h in _existing_portfolio)
+        st.caption(f"{len(_existing_portfolio)} positions: {tickers_str[:80]}{'…' if len(tickers_str) > 80 else ''}")
+        col_clr, col_reimport = st.columns(2)
+        if col_clr.button("🗑 Clear Portfolio", use_container_width=True):
             st.session_state.portfolio          = []
             st.session_state._portfolio_file_id = None
             st.session_state.auto_scan_complete = False
             st.session_state.auto_results       = []
             _portfolio_save_remote([])
             st.rerun()
+        with st.expander("↩ Re-import CSV", expanded=False):
+            uploaded_pf = st.file_uploader(
+                "Upload Yahoo Finance export (.csv)",
+                type="csv",
+                label_visibility="collapsed",
+                key="pf_uploader_reimport",
+            )
+            if uploaded_pf is not None:
+                _handle_pf_upload(uploaded_pf)
+    else:
+        uploaded_pf = st.file_uploader(
+            "Upload Yahoo Finance export (.csv)",
+            type="csv",
+            label_visibility="collapsed",
+            key="pf_uploader_new",
+        )
+        if uploaded_pf is not None:
+            _handle_pf_upload(uploaded_pf)
+
+    portfolio = st.session_state.get("portfolio", [])
 
     st.divider()
 
