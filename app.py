@@ -955,6 +955,13 @@ with st.sidebar:
         if st.session_state.get("_portfolio_file_id") != pf_file_id:
             try:
                 df_pf = pd.read_csv(uploaded_pf)
+                # ── CSV diagnostic (temporary) ────────────────────────────────
+                st.session_state._csv_debug = {
+                    "columns": list(df_pf.columns),
+                    "rows":    len(df_pf),
+                    "sample":  df_pf.head(8).to_dict(orient="records"),
+                }
+                # ─────────────────────────────────────────────────────────────
                 holdings = parse_yahoo_portfolio(df_pf)
                 if holdings is None:
                     st.error(
@@ -974,6 +981,14 @@ with st.sidebar:
                     st.success(f"Loaded {len(holdings)} positions from {uploaded_pf.name}")
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
+
+        # Show raw CSV diagnostic so we can see the structure
+        dbg = st.session_state.get("_csv_debug")
+        if dbg:
+            with st.expander("🔬 CSV Debug (columns & first 8 rows)"):
+                st.write("**Columns:**", dbg["columns"])
+                st.write(f"**Total rows:** {dbg['rows']}")
+                st.dataframe(pd.DataFrame(dbg["sample"]), use_container_width=True)
 
     portfolio = st.session_state.get("portfolio", [])
     if portfolio:
