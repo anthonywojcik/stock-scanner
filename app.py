@@ -343,18 +343,22 @@ def _portfolio_load_remote() -> list | None:
         pass
     return None
 
-def _portfolio_save_remote(holdings: list) -> None:
+def _portfolio_save_remote(holdings: list) -> str | None:
+    """Returns None on success, or an error string on failure."""
     gid = _gist_get_id()
     if not gid:
-        return
+        return "Could not find or create Gist"
     try:
-        requests.patch(
+        r = requests.patch(
             f"https://api.github.com/gists/{gid}",
             headers=_gh_headers(), timeout=8,
             json={"files": {_GH_GIST_FILE: {"content": json.dumps(holdings)}}},
         )
-    except Exception:
-        pass
+        if not r.ok:
+            return f"GitHub API error {r.status_code}: {r.json().get('message', r.text[:120])}"
+        return None
+    except Exception as e:
+        return str(e)
 
 # Load portfolio from Gist on fresh session
 if "portfolio" not in st.session_state and _GH_TOKEN:
@@ -1134,10 +1138,23 @@ with st.sidebar:
                     st.session_state._portfolio_file_id = pf_file_id
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
-                    _portfolio_save_remote(holdings)
-                    st.success(f"Loaded {len(holdings)} positions from {uploaded_pf.name}")
+                    save_err = _portfolio_save_remote(holdings)
+                    if save_err:
+                        st.warning(f"Loaded locally but cloud save failed: {save_err}")
+                    else:
+                        st.success(f"Loaded {len(holdings)} positions · saved to cloud")
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
+
+    if _GH_TOKEN and not _existing_portfolio:
+        if st.button("☁️ Reload from Cloud", use_container_width=True):
+            st.session_state.pop("_gist_id", None)
+            _remote = _portfolio_load_remote()
+            if _remote:
+                st.session_state.portfolio = _remote
+                st.rerun()
+            else:
+                st.warning("Nothing found in cloud storage.")
 
     if _existing_portfolio:
         tickers_str = ", ".join(h["ticker"] for h in _existing_portfolio)
