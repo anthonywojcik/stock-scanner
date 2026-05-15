@@ -970,7 +970,8 @@ with tab_scout:
                 universe[_t] = "Your Portfolio"
         st.session_state.last_universe = universe
 
-        results = two_pass_scan(universe, progress_callback=auto_progress, deep_n=30)
+        results = two_pass_scan(universe, progress_callback=auto_progress, deep_n=30,
+                                force_tickers=pf_tickers)
         prog.progress(100)
         ticker_disp.empty()
         phase_label.empty()

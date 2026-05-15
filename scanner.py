@@ -170,6 +170,7 @@ def two_pass_scan(
     universe: "dict[str, str] | list[str]",
     progress_callback=None,
     deep_n: int = 30,
+    force_tickers: "list[str] | None" = None,
 ) -> list[dict]:
     """
     Fast prescriptive scan optimised for the auto-scout feature.
@@ -225,7 +226,11 @@ def two_pass_scan(
             continue
 
     pass1.sort(key=lambda x: x["quick"], reverse=True)
-    candidates = [r["ticker"] for r in pass1[:deep_n]]
+    top = [r["ticker"] for r in pass1[:deep_n]]
+    # Portfolio/forced tickers always advance to Pass 2, regardless of technical rank
+    forced = {t.upper() for t in (force_tickers or [])}
+    extra  = [r["ticker"] for r in pass1 if r["ticker"] in forced and r["ticker"] not in top]
+    candidates = top + extra
 
     # ── Pass 2: full deep analysis ────────────────────────────────────────────
     full_results = []
