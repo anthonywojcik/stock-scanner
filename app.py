@@ -224,9 +224,25 @@ div[data-testid="metric-container"] [data-testid="stMetricValue"] { font-size:1.
 """, unsafe_allow_html=True)
 
 
+# ── Cookie-based session persistence ──────────────────────────────────────────
+try:
+    from streamlit_cookies_controller import CookieController
+    _cookies = CookieController()
+except Exception:
+    _cookies = None
+
+_AUTH_COOKIE = "rs_auth"
+_AUTH_VALUE  = "ok"
+
 # ── Password gate ─────────────────────────────────────────────────────────────
 def _check_password() -> bool:
     if st.session_state.get("authenticated"):
+        return True
+
+    # Check persistent cookie — returns None on first render while component loads,
+    # which triggers a rerun once hydrated; works correctly on second render.
+    if _cookies is not None and _cookies.get(_AUTH_COOKIE) == _AUTH_VALUE:
+        st.session_state.authenticated = True
         return True
 
     col_l, col_m, col_r = st.columns([1, 1.4, 1])
@@ -246,6 +262,8 @@ def _check_password() -> bool:
                 st.error("App secret not configured. Add `password = \"yourpassword\"` in Streamlit Cloud → App Settings → Secrets.")
             elif hmac.compare_digest(pwd.strip().encode(), expected.encode()):
                 st.session_state.authenticated = True
+                if _cookies is not None:
+                    _cookies.set(_AUTH_COOKIE, _AUTH_VALUE, max_age=86400 * 30)
                 st.rerun()
             else:
                 st.error("Incorrect password.")
