@@ -1341,6 +1341,26 @@ with tab_portfolio:
             delta=f"{total_pnl_pct:+.1f}%",
         )
 
+        # ── Breakdown table ────────────────────────────────────────────────────
+        with st.expander("🔢 Position Breakdown (tap to verify totals)"):
+            rows = []
+            for h in sorted(portfolio, key=lambda x: x["ticker"]):
+                r  = scored_map.get(h["ticker"])
+                lp = _live(h, r)
+                rows.append({
+                    "Ticker":       h["ticker"],
+                    "Shares":       round(h["shares"], 4),
+                    "Cost/Share":   round(h["cost_basis"], 2),
+                    "Total Cost":   round(h["shares"] * h["cost_basis"], 2),
+                    "Live Price":   round(lp, 2) if lp > 0 else "—",
+                    "Market Value": round(h["shares"] * lp, 2) if lp > 0 else "—",
+                    "P&L $":        round(h["shares"] * (lp - h["cost_basis"]), 2) if lp > 0 and h["cost_basis"] > 0 else "—",
+                })
+            st.dataframe(
+                pd.DataFrame(rows).set_index("Ticker"),
+                use_container_width=True,
+            )
+
         st.divider()
 
         # ── Position cards — sorted: ADD first, EXIT last ──────────────────────
