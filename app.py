@@ -705,6 +705,118 @@ def portfolio_action(score: float | None, pnl_pct: float) -> tuple[str, str]:
         return "EXIT", "badge-hold"
     return "HOLD", "badge-scale"
 
+
+def portfolio_prescription(
+    action: str,
+    score: float | None,
+    shares: float,
+    cost_basis: float,
+    live_price: float,
+    pnl_pct: float,
+    total_portfolio_value: float,
+) -> tuple[str, str]:
+    """
+    Return (prescription_text, hex_color) — specific, quantified guidance
+    on how much to buy or trim based on score-driven target allocations.
+
+    Target weights by score:
+      85+  → 12%  (high conviction)
+      75–84 → 9%
+      65–74 → 6%
+      50–64 → 3%
+      < 50  → 0%  (exit territory)
+    """
+    if live_price <= 0 or total_portfolio_value <= 0 or score is None:
+        return "", "#607d96"
+
+    pos_value = shares * live_price
+    pos_pct   = pos_value / total_portfolio_value * 100
+
+    if score >= 85:   target_pct = 12.0
+    elif score >= 75: target_pct = 9.0
+    elif score >= 65: target_pct = 6.0
+    elif score >= 50: target_pct = 3.0
+    else:             target_pct = 0.0
+
+    target_value = total_portfolio_value * target_pct / 100
+    gap          = target_value - pos_value   # + = under-weight, − = over-weight
+
+    if action in ("ADD", "BUY MORE"):
+        if gap >= live_price:
+            add_sh  = max(1, round(gap / live_price))
+            add_val = round(add_sh * live_price)
+            return (
+                f"Buy ~{add_sh:,} sh (${add_val:,}) to reach {target_pct:.0f}% target weight",
+                "#00d084",
+            )
+        return f"Near {target_pct:.0f}% target — hold current {pos_pct:.1f}% position", "#00d084"
+
+    elif action == "HOLD":
+        if score >= 72 and pnl_pct >= 35:
+            # Strong signal but gains blocking a fresh add — give a pullback price
+            pullback = round(live_price * (0.88 if score >= 80 else 0.85), 2)
+            if gap >= live_price:
+                add_sh = max(1, round(gap / pullback))
+                return (
+                    f"Up {pnl_pct:.0f}% — hold {pos_pct:.1f}% position. "
+                    f"Consider adding ~{add_sh:,} sh on pullback to ${pullback:,.2f}",
+                    "#7092b0",
+                )
+            return (
+                f"Up {pnl_pct:.0f}% and near target weight — hold {pos_pct:.1f}% position",
+                "#7092b0",
+            )
+        if -gap > target_value * 0.4:   # over-weight by >40% of target
+            trim_sh  = max(1, round(-gap / live_price))
+            trim_val = round(trim_sh * live_price)
+            gain     = round(trim_sh * (live_price - cost_basis))
+            return (
+                f"Over-weight at {pos_pct:.1f}% (target {target_pct:.0f}%) — "
+                f"trim ~{trim_sh:,} sh (${trim_val:,}) to lock in ${gain:,}",
+                "#fbbf24",
+            )
+        return (
+            f"Hold {pos_pct:.1f}% position — target {target_pct:.0f}%. "
+            f"Trim if score falls below 60.",
+            "#607d96",
+        )
+
+    elif action == "TRIM":
+        frac     = 0.40 if pnl_pct > 50 else 0.25
+        trim_sh  = max(1, round(shares * frac))
+        trim_val = round(trim_sh * live_price)
+        gain     = round(trim_sh * (live_price - cost_basis))
+        return (
+            f"Sell ~{trim_sh:,} sh (${trim_val:,}) — take ${gain:,} off the table "
+            f"({frac*100:.0f}% of position)",
+            "#f97316",
+        )
+
+    elif action == "CUT":
+        cut_sh  = max(1, round(shares * 0.5))
+        cut_val = round(cut_sh * live_price)
+        result  = round(cut_sh * (live_price - cost_basis))
+        tag     = f"limit ${abs(result):,} loss" if result < 0 else f"keep ${result:,} gain"
+        return (
+            f"Cut in half — sell ~{cut_sh:,} sh (${cut_val:,}) to {tag}",
+            "#f43f5e",
+        )
+
+    elif action == "EXIT":
+        exit_val   = round(shares * live_price)
+        pnl_dollar = round(shares * (live_price - cost_basis))
+        if pnl_dollar >= 0:
+            return (
+                f"Exit fully — sell {shares:,.0f} sh (${exit_val:,}) · take ${pnl_dollar:,} profit",
+                "#f43f5e",
+            )
+        return (
+            f"Exit fully — sell {shares:,.0f} sh (${exit_val:,}) · limit loss at ${abs(pnl_dollar):,}",
+            "#f43f5e",
+        )
+
+    return "", "#607d96"
+
 def make_action_statement(result: dict) -> tuple[str, str, str]:
     score = result["composite"]
     sigs  = result["signals"]
@@ -1448,6 +1560,9 @@ with tab_portfolio:
             pnl_sign   = "+" if pnl_dollar >= 0 else "−"
 
             act_lbl, act_css = portfolio_action(score, pnl_pct)
+            rx_text, rx_color = portfolio_prescription(
+                act_lbl, score, shares, cost_basis, live_price, pnl_pct, total_value
+            )
             name   = r.get("name", "")[:28]   if r else h["ticker"]
             sector = r.get("sector", "")       if r else ""
 
@@ -1500,6 +1615,13 @@ with tab_portfolio:
                 f"</div>"
                 f"<div style='font-size:0.72em;color:#607d96;margin-top:5px'>{detail_line}</div>"
                 f"</div>"
+                + (
+                f"<div style='margin:6px 0 8px;padding:7px 11px;background:rgba(0,0,0,0.2);"
+                f"border-radius:7px;border-left:3px solid {rx_color}'>"
+                f"<span style='font-size:0.78em;color:{rx_color};font-weight:600'>→ </span>"
+                f"<span style='font-size:0.78em;color:#c8d8e8'>{rx_text}</span>"
+                f"</div>" if rx_text else ""
+                ) +
                 f"<div style='margin-bottom:6px;line-height:2.0'>{cat_pills}</div>"
                 f"</div>"
                 f"<div style='text-align:right;flex-shrink:0'>{score_block}</div>"
