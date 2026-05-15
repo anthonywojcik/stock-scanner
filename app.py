@@ -505,9 +505,12 @@ def fetch_live_prices(tickers: tuple) -> dict[str, float]:
 
 def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
-    Parse a Yahoo Finance (or compatible brokerage) portfolio export CSV.
-    Handles multiple column-name variants Yahoo Finance has used over time.
-    Multiple lots of the same ticker are aggregated with weighted-average cost basis.
+    Parse a Yahoo Finance portfolio export CSV into net open positions.
+
+    Yahoo Finance exports one row per lot (transaction). Sells appear as
+    negative quantities. We net buys against sells per ticker so the share
+    count matches the actual current holding. Closed positions (net <= 0)
+    are excluded. Weighted-average cost basis is calculated from buy lots only.
     """
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -541,71 +544,93 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
         return None
 
     def _f(val) -> float:
+        """Parse numeric cell — returns absolute value, 0.0 for blanks/NaN."""
         try:
             f = float(str(val).replace(",", "").replace("$", "").replace("%", "").strip())
-            return 0.0 if f != f else f  # NaN guard
+            return 0.0 if f != f else abs(f)
         except (ValueError, TypeError):
             return 0.0
 
-    lots: list[dict] = []
+    def _f_signed(val) -> float:
+        """Parse numeric cell preserving sign (negative = sell lot)."""
+        try:
+            f = float(str(val).replace(",", "").replace("$", "").replace("%", "").strip())
+            return 0.0 if f != f else f
+        except (ValueError, TypeError):
+            return 0.0
+
+    # ── Per-ticker accumulators ─────────────────────────────────────────────────
+    # net_shares  = sum of all lots (positive buys, negative sells) → current position
+    # buy_cost    = sum(qty * cost_per_share) for buy lots only → for weighted avg cost
+    # buy_shares  = sum of buy quantities only → denominator of weighted avg cost
+    # price_last  = most recent per-share price seen in the CSV
+    # mval_last   = most recent market value seen in the CSV
+    agg: dict = {}
+
     for _, row in df.iterrows():
         ticker = str(row.get(sym_col, "")).strip().upper()
         if not ticker or not _TICKER_VALID.match(ticker):
             continue
-        qty = _f(row.get(qty_col, 0))
-        if qty <= 0:
+
+        qty = _f_signed(row.get(qty_col, 0))
+        if qty == 0.0:
             continue
+
+        is_buy = qty > 0
+        abs_qty = abs(qty)
 
         cost  = _f(row.get(cost_col,  0)) if cost_col  else 0.0
         price = _f(row.get(price_col, 0)) if price_col else 0.0
         mval  = _f(row.get(mval_col,  0)) if mval_col  else 0.0
         book  = _f(row.get(book_col,  0)) if book_col  else 0.0
 
-        # Derive cost/share from total book cost when per-share column missing
-        if cost == 0.0 and book > 0 and qty > 0:
-            cost = book / qty
-        # Derive price from market value when per-share column missing
-        if price == 0.0 and mval > 0 and qty > 0:
-            price = mval / qty
+        # Derive per-share cost from total book cost when column missing
+        if cost == 0.0 and book > 0 and abs_qty > 0:
+            cost = book / abs_qty
+        # Derive per-share price from market value when column missing
+        if price == 0.0 and mval > 0 and abs_qty > 0:
+            price = mval / abs_qty
 
-        lots.append({
-            "ticker":           ticker,
-            "shares":           qty,
-            "cost_basis":       cost,
-            "current_price_csv": price,
-            "market_value_csv": mval if mval > 0 else (price * qty),
+        if ticker not in agg:
+            agg[ticker] = {
+                "net_shares": 0.0,
+                "buy_shares": 0.0,
+                "buy_cost":   0.0,
+                "price_last": 0.0,
+                "mval_last":  0.0,
+            }
+
+        agg[ticker]["net_shares"] += qty          # positive buy, negative sell
+        if is_buy:
+            agg[ticker]["buy_shares"] += abs_qty
+            agg[ticker]["buy_cost"]   += abs_qty * cost
+        if price > 0:
+            agg[ticker]["price_last"] = price     # keep latest snapshot price
+        if mval > 0:
+            agg[ticker]["mval_last"]  = mval
+
+    # ── Build result — only open (net positive) positions ─────────────────────
+    result = []
+    for t, d in agg.items():
+        net = d["net_shares"]
+        if net <= 0:
+            continue  # fully sold or empty
+
+        avg_cost = d["buy_cost"] / d["buy_shares"] if d["buy_shares"] > 0 else 0.0
+        csv_price = d["price_last"] or (
+            d["mval_last"] / net if d["mval_last"] > 0 else 0.0
+        )
+        result.append({
+            "ticker":            t,
+            "shares":            round(net, 6),
+            "cost_basis":        round(avg_cost, 4),
+            "current_price_csv": round(csv_price, 4),
+            "market_value_csv":  round(d["mval_last"], 2),
         })
 
-    if not lots:
+    if not result:
         return None
-
-    # Aggregate multiple lots — weighted-average cost basis
-    agg: dict = {}
-    for h in lots:
-        t = h["ticker"]
-        if t not in agg:
-            agg[t] = {"shares": 0.0, "cost_total": 0.0, "mval_total": 0.0, "price_last": 0.0}
-        agg[t]["shares"]     += h["shares"]
-        agg[t]["cost_total"] += h["shares"] * h["cost_basis"]
-        agg[t]["mval_total"] += h["market_value_csv"]
-        agg[t]["price_last"]  = h["current_price_csv"]
-
-    return sorted(
-        [
-            {
-                "ticker":           t,
-                "shares":           d["shares"],
-                "cost_basis":       d["cost_total"] / d["shares"] if d["shares"] else 0.0,
-                # Best CSV price: explicit per-share price, else derive from market value
-                "current_price_csv": d["price_last"] or (
-                    d["mval_total"] / d["shares"] if d["shares"] and d["mval_total"] > 0 else 0.0
-                ),
-                "market_value_csv": d["mval_total"],
-            }
-            for t, d in agg.items()
-        ],
-        key=lambda x: x["ticker"],
-    )
+    return sorted(result, key=lambda x: x["ticker"])
 
 def portfolio_action(score: float | None, pnl_pct: float) -> tuple[str, str]:
     """Return (label, badge_css) recommendation for a held position."""
