@@ -1462,6 +1462,17 @@ with tab_portfolio:
 
     if not portfolio:
         st.markdown("### 💼 My Portfolio")
+        if _GH_TOKEN:
+            st.warning(
+                "Cloud sync is active but no portfolio was found. "
+                "Upload your CSV once using the sidebar — it will be saved and restored automatically on every device."
+            )
+        else:
+            st.warning(
+                "Cloud sync is not configured. Your portfolio won't persist across devices or refreshes.\n\n"
+                "To enable it: Streamlit Cloud → your app → **⋮ Settings → Secrets** and add:\n"
+                "```\ngithub_token = \"ghp_your_token_here\"\n```"
+            )
         st.info(
             "Upload your Yahoo Finance portfolio export to see every holding scored, "
             "ranked, and given a specific action (Add / Hold / Trim / Cut).\n\n"
