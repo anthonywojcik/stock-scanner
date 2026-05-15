@@ -251,31 +251,69 @@ if not _check_password():
     st.stop()
 
 
-# ── Browser localStorage — portfolio persistence ──────────────────────────────
-try:
-    from streamlit_local_storage import LocalStorage as _LS
-    _localS = _LS()
+# ── GitHub Gist portfolio persistence ─────────────────────────────────────────
+_GH_TOKEN    = st.secrets.get("github_token", "").strip()
+_GH_GIST_FILE = "rs_portfolio.json"
+_GH_HDRS     = lambda: {                                        # noqa: E731
+    "Accept": "application/vnd.github.v3+json",
+    "Authorization": f"token {_GH_TOKEN}",
+}
 
-    if not st.session_state.get("_pf_storage_done"):
-        _stored = _localS.getItem("rs_portfolio")
-        _ls_try = st.session_state.get("_ls_try", 0)
-        if _stored is not None:
-            # Component hydrated and returned a value
-            if "portfolio" not in st.session_state:
-                try:
-                    _loaded = json.loads(_stored) if isinstance(_stored, str) else _stored
-                    if isinstance(_loaded, list) and _loaded:
-                        st.session_state.portfolio = _loaded
-                except Exception:
-                    pass
-            st.session_state._pf_storage_done = True
-        elif _ls_try >= 1:
-            # Component had time to load; key simply doesn't exist
-            st.session_state._pf_storage_done = True
-        else:
-            st.session_state._ls_try = _ls_try + 1
-except Exception:
-    _localS = None  # package not installed yet — silently skip
+@st.cache_data(ttl=86400, show_spinner=False)
+def _gist_get_id(token: str) -> str | None:
+    """Find existing Rally Scout gist or create a new private one."""
+    if not token:
+        return None
+    h = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {token}"}
+    try:
+        r = requests.get("https://api.github.com/gists", headers=h, timeout=8)
+        if r.ok:
+            for g in r.json():
+                if _GH_GIST_FILE in g.get("files", {}):
+                    return g["id"]
+        r = requests.post("https://api.github.com/gists", headers=h, timeout=8, json={
+            "description": "Rally Scout — portfolio data",
+            "public": False,
+            "files": {_GH_GIST_FILE: {"content": "[]"}},
+        })
+        if r.ok:
+            return r.json()["id"]
+    except Exception:
+        pass
+    return None
+
+def _portfolio_load_remote() -> list | None:
+    gid = _gist_get_id(_GH_TOKEN)
+    if not gid:
+        return None
+    try:
+        r = requests.get(f"https://api.github.com/gists/{gid}", headers=_GH_HDRS(), timeout=8)
+        if r.ok:
+            content = r.json()["files"][_GH_GIST_FILE]["content"]
+            data = json.loads(content)
+            return data if isinstance(data, list) and data else None
+    except Exception:
+        pass
+    return None
+
+def _portfolio_save_remote(holdings: list) -> None:
+    gid = _gist_get_id(_GH_TOKEN)
+    if not gid:
+        return
+    try:
+        requests.patch(
+            f"https://api.github.com/gists/{gid}",
+            headers=_GH_HDRS(), timeout=8,
+            json={"files": {_GH_GIST_FILE: {"content": json.dumps(holdings)}}},
+        )
+    except Exception:
+        pass
+
+# Load portfolio from Gist on fresh session
+if "portfolio" not in st.session_state and _GH_TOKEN:
+    _remote = _portfolio_load_remote()
+    if _remote:
+        st.session_state.portfolio = _remote
 
 
 # ── Translation tables ────────────────────────────────────────────────────────
@@ -925,13 +963,6 @@ with st.sidebar:
         if st.session_state.get("_portfolio_file_id") != pf_file_id:
             try:
                 df_pf = pd.read_csv(uploaded_pf)
-                # ── CSV diagnostic (temporary) ────────────────────────────────
-                st.session_state._csv_debug = {
-                    "columns": list(df_pf.columns),
-                    "rows":    len(df_pf),
-                    "sample":  df_pf.head(8).to_dict(orient="records"),
-                }
-                # ─────────────────────────────────────────────────────────────
                 holdings = parse_yahoo_portfolio(df_pf)
                 if holdings is None:
                     st.error(
@@ -943,22 +974,10 @@ with st.sidebar:
                     st.session_state._portfolio_file_id = pf_file_id
                     st.session_state.auto_scan_complete = False
                     st.session_state.auto_results       = []
-                    if _localS is not None:
-                        try:
-                            _localS.setItem("rs_portfolio", json.dumps(holdings))
-                        except Exception:
-                            pass
+                    _portfolio_save_remote(holdings)
                     st.success(f"Loaded {len(holdings)} positions from {uploaded_pf.name}")
             except Exception as exc:
                 st.error(f"Could not parse CSV: {exc}")
-
-        # Show raw CSV diagnostic so we can see the structure
-        dbg = st.session_state.get("_csv_debug")
-        if dbg:
-            with st.expander("🔬 CSV Debug (columns & first 8 rows)"):
-                st.write("**Columns:**", dbg["columns"])
-                st.write(f"**Total rows:** {dbg['rows']}")
-                st.dataframe(pd.DataFrame(dbg["sample"]), use_container_width=True)
 
     portfolio = st.session_state.get("portfolio", [])
     if portfolio:
@@ -969,11 +988,7 @@ with st.sidebar:
             st.session_state._portfolio_file_id = None
             st.session_state.auto_scan_complete = False
             st.session_state.auto_results       = []
-            if _localS is not None:
-                try:
-                    _localS.deleteItem("rs_portfolio")
-                except Exception:
-                    pass
+            _portfolio_save_remote([])
             st.rerun()
 
     st.divider()
@@ -1350,26 +1365,6 @@ with tab_portfolio:
             f"${total_pnl:+,.0f}",
             delta=f"{total_pnl_pct:+.1f}%",
         )
-
-        # ── Breakdown table ────────────────────────────────────────────────────
-        with st.expander("🔢 Position Breakdown (tap to verify totals)"):
-            rows = []
-            for h in sorted(portfolio, key=lambda x: x["ticker"]):
-                r  = scored_map.get(h["ticker"])
-                lp = _live(h, r)
-                rows.append({
-                    "Ticker":       h["ticker"],
-                    "Shares":       round(h["shares"], 4),
-                    "Cost/Share":   round(h["cost_basis"], 2),
-                    "Total Cost":   round(h["shares"] * h["cost_basis"], 2),
-                    "Live Price":   round(lp, 2) if lp > 0 else "—",
-                    "Market Value": round(h["shares"] * lp, 2) if lp > 0 else "—",
-                    "P&L $":        round(h["shares"] * (lp - h["cost_basis"]), 2) if lp > 0 and h["cost_basis"] > 0 else "—",
-                })
-            st.dataframe(
-                pd.DataFrame(rows).set_index("Ticker"),
-                use_container_width=True,
-            )
 
         st.divider()
 
