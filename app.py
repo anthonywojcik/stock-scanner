@@ -256,58 +256,83 @@ if not _check_password():
 
 
 # ── GitHub Gist portfolio persistence ─────────────────────────────────────────
-_GH_TOKEN    = st.secrets.get("github_token", "").strip()
+_GH_TOKEN     = st.secrets.get("github_token", "").strip()
 _GH_GIST_FILE = "rs_portfolio.json"
-_GH_HDRS     = lambda: {                                        # noqa: E731
-    "Accept": "application/vnd.github.v3+json",
-    "Authorization": f"token {_GH_TOKEN}",
-}
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def _gist_get_id(token: str) -> str | None:
-    """Find existing Rally Scout gist or create a new private one."""
-    if not token:
+def _gh_headers() -> dict:
+    return {"Accept": "application/vnd.github.v3+json",
+            "Authorization": f"token {_GH_TOKEN}"}
+
+def _gist_get_id() -> str | None:
+    """
+    Find the Rally Scout gist (searches all pages) or create one.
+    Cached in session_state so the API is called at most once per page load.
+    """
+    if not _GH_TOKEN:
         return None
-    h = {"Accept": "application/vnd.github.v3+json", "Authorization": f"token {token}"}
+    if "_gist_id" in st.session_state:
+        return st.session_state._gist_id
+
+    h = _gh_headers()
     try:
-        r = requests.get("https://api.github.com/gists", headers=h, timeout=8)
-        if r.ok:
-            for g in r.json():
+        # Paginate through all gists — default page size is 30
+        page = 1
+        while True:
+            r = requests.get(
+                f"https://api.github.com/gists?per_page=100&page={page}",
+                headers=h, timeout=8,
+            )
+            if not r.ok:
+                break
+            gists = r.json()
+            if not gists:
+                break
+            for g in gists:
                 if _GH_GIST_FILE in g.get("files", {}):
+                    st.session_state._gist_id = g["id"]
                     return g["id"]
+            if len(gists) < 100:
+                break
+            page += 1
+
+        # Not found — create a new private gist
         r = requests.post("https://api.github.com/gists", headers=h, timeout=8, json={
             "description": "Rally Scout — portfolio data",
             "public": False,
             "files": {_GH_GIST_FILE: {"content": "[]"}},
         })
         if r.ok:
-            return r.json()["id"]
+            gid = r.json()["id"]
+            st.session_state._gist_id = gid
+            return gid
     except Exception:
         pass
     return None
 
 def _portfolio_load_remote() -> list | None:
-    gid = _gist_get_id(_GH_TOKEN)
+    gid = _gist_get_id()
     if not gid:
         return None
     try:
-        r = requests.get(f"https://api.github.com/gists/{gid}", headers=_GH_HDRS(), timeout=8)
+        r = requests.get(f"https://api.github.com/gists/{gid}",
+                         headers=_gh_headers(), timeout=8)
         if r.ok:
-            content = r.json()["files"][_GH_GIST_FILE]["content"]
-            data = json.loads(content)
-            return data if isinstance(data, list) and data else None
+            content = r.json()["files"].get(_GH_GIST_FILE, {}).get("content", "")
+            if content:
+                data = json.loads(content)
+                return data if isinstance(data, list) and data else None
     except Exception:
         pass
     return None
 
 def _portfolio_save_remote(holdings: list) -> None:
-    gid = _gist_get_id(_GH_TOKEN)
+    gid = _gist_get_id()
     if not gid:
         return
     try:
         requests.patch(
             f"https://api.github.com/gists/{gid}",
-            headers=_GH_HDRS(), timeout=8,
+            headers=_gh_headers(), timeout=8,
             json={"files": {_GH_GIST_FILE: {"content": json.dumps(holdings)}}},
         )
     except Exception:
@@ -955,8 +980,12 @@ with st.sidebar:
     st.divider()
 
     # Portfolio import — Yahoo Finance CSV
-    st.markdown("**💼 My Portfolio**")
-    st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here.")
+    if _GH_TOKEN:
+        st.markdown("**💼 My Portfolio** ☁️")
+        st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Synced across devices.")
+    else:
+        st.markdown("**💼 My Portfolio**")
+        st.caption("Yahoo Finance → Portfolio → top-right Export button → upload here. Add `github_token` to secrets to sync across devices.")
     uploaded_pf = st.file_uploader(
         "Upload Yahoo Finance export (.csv)",
         type="csv",
