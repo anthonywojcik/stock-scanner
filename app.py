@@ -507,10 +507,10 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
     """
     Parse a Yahoo Finance portfolio export CSV into net open positions.
 
-    Yahoo Finance exports one row per lot (transaction). Sells appear as
-    negative quantities. We net buys against sells per ticker so the share
-    count matches the actual current holding. Closed positions (net <= 0)
-    are excluded. Weighted-average cost basis is calculated from buy lots only.
+    Yahoo Finance exports one row per lot. Sells have POSITIVE quantities
+    but are labelled in a "Transaction Type" column (value = "SELL").
+    We net buys against sells per ticker, exclude closed positions (net <= 0),
+    and compute weighted-average cost basis from buy lots only.
     """
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -522,6 +522,7 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
 
     sym_col   = _col("Symbol", "Ticker", "Tick")
     qty_col   = _col("Quantity", "Shares", "Qty", "Units", "# Shares", "Num Shares")
+    type_col  = _col("Transaction Type", "Type", "Action", "Side", "Trans Type", "Order Type")
     cost_col  = _col(
         "Purchase Price", "Avg Cost/Share", "Avg Cost / Share",
         "Average Cost", "Cost/Share", "Cost Basis/Share",
@@ -531,40 +532,19 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
         "Current Price", "Last Price", "Price", "Market Price",
         "Last", "Close", "Mark",
     )
-    mval_col  = _col(
-        "Market Value", "Total Value", "Current Value",
-        "Mkt Value", "Market Val", "Value",
-    )
-    book_col  = _col(
-        "Book Cost", "Book Value", "Total Cost", "Cost Basis",
-        "Total Book Cost", "Book Value Total",
-    )
 
     if sym_col is None or qty_col is None:
         return None
 
     def _f(val) -> float:
-        """Parse numeric cell — returns absolute value, 0.0 for blanks/NaN."""
         try:
             f = float(str(val).replace(",", "").replace("$", "").replace("%", "").strip())
             return 0.0 if f != f else abs(f)
         except (ValueError, TypeError):
             return 0.0
 
-    def _f_signed(val) -> float:
-        """Parse numeric cell preserving sign (negative = sell lot)."""
-        try:
-            f = float(str(val).replace(",", "").replace("$", "").replace("%", "").strip())
-            return 0.0 if f != f else f
-        except (ValueError, TypeError):
-            return 0.0
+    _SELL_TYPES = {"SELL", "SOLD", "S", "SHORT", "SHORT SELL"}
 
-    # ── Per-ticker accumulators ─────────────────────────────────────────────────
-    # net_shares  = sum of all lots (positive buys, negative sells) → current position
-    # buy_cost    = sum(qty * cost_per_share) for buy lots only → for weighted avg cost
-    # buy_shares  = sum of buy quantities only → denominator of weighted avg cost
-    # price_last  = most recent per-share price seen in the CSV
-    # mval_last   = most recent market value seen in the CSV
     agg: dict = {}
 
     for _, row in df.iterrows():
@@ -572,24 +552,16 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
         if not ticker or not _TICKER_VALID.match(ticker):
             continue
 
-        qty = _f_signed(row.get(qty_col, 0))
+        qty = _f(row.get(qty_col, 0))   # always positive in Yahoo Finance CSV
         if qty == 0.0:
             continue
 
-        is_buy = qty > 0
-        abs_qty = abs(qty)
+        # Determine buy vs sell from Transaction Type column, fall back to sign
+        tx_raw = str(row.get(type_col, "")).strip().upper() if type_col else ""
+        is_sell = tx_raw in _SELL_TYPES
 
         cost  = _f(row.get(cost_col,  0)) if cost_col  else 0.0
         price = _f(row.get(price_col, 0)) if price_col else 0.0
-        mval  = _f(row.get(mval_col,  0)) if mval_col  else 0.0
-        book  = _f(row.get(book_col,  0)) if book_col  else 0.0
-
-        # Derive per-share cost from total book cost when column missing
-        if cost == 0.0 and book > 0 and abs_qty > 0:
-            cost = book / abs_qty
-        # Derive per-share price from market value when column missing
-        if price == 0.0 and mval > 0 and abs_qty > 0:
-            price = mval / abs_qty
 
         if ticker not in agg:
             agg[ticker] = {
@@ -597,35 +569,33 @@ def parse_yahoo_portfolio(df: pd.DataFrame) -> list[dict] | None:
                 "buy_shares": 0.0,
                 "buy_cost":   0.0,
                 "price_last": 0.0,
-                "mval_last":  0.0,
             }
 
-        agg[ticker]["net_shares"] += qty          # positive buy, negative sell
-        if is_buy:
-            agg[ticker]["buy_shares"] += abs_qty
-            agg[ticker]["buy_cost"]   += abs_qty * cost
+        if is_sell:
+            agg[ticker]["net_shares"] -= qty
+        else:
+            agg[ticker]["net_shares"] += qty
+            agg[ticker]["buy_shares"] += qty
+            agg[ticker]["buy_cost"]   += qty * cost
+
         if price > 0:
-            agg[ticker]["price_last"] = price     # keep latest snapshot price
-        if mval > 0:
-            agg[ticker]["mval_last"]  = mval
+            agg[ticker]["price_last"] = price   # same for all rows of same ticker
 
     # ── Build result — only open (net positive) positions ─────────────────────
     result = []
     for t, d in agg.items():
-        net = d["net_shares"]
+        net = round(d["net_shares"], 6)
         if net <= 0:
-            continue  # fully sold or empty
+            continue
 
-        avg_cost = d["buy_cost"] / d["buy_shares"] if d["buy_shares"] > 0 else 0.0
-        csv_price = d["price_last"] or (
-            d["mval_last"] / net if d["mval_last"] > 0 else 0.0
-        )
+        avg_cost  = d["buy_cost"] / d["buy_shares"] if d["buy_shares"] > 0 else 0.0
+        csv_price = d["price_last"]
         result.append({
             "ticker":            t,
-            "shares":            round(net, 6),
+            "shares":            net,
             "cost_basis":        round(avg_cost, 4),
             "current_price_csv": round(csv_price, 4),
-            "market_value_csv":  round(d["mval_last"], 2),
+            "market_value_csv":  round(net * csv_price, 2),
         })
 
     if not result:
